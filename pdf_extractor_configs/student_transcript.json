@@ -1,0 +1,27 @@
+{
+  "report_type": "student_transcript",
+  "record_separator": "Bayamon Community College",
+  "output_columns": [
+    "name",
+    "address",
+    "id",
+    "dob",
+    "phone",
+    "program",
+    "drop_date",
+    "group",
+    "status",
+    "exp_grad_date",
+    "ft_pt",
+    "first_term",
+    "lda",
+    "grad_date",
+    "session",
+    "term",
+    "course",
+    "course_description",
+    "grade",
+    "units_attempted",
+    "units_completed"
+  ]
+}

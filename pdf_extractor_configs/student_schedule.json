@@ -1,0 +1,29 @@
+{
+  "report_type": "student_schedule",
+  "record_separator": "Bayamon Community College",
+  "output_columns": [
+    "student_name",
+    "program_description",
+    "drop_date",
+    "group",
+    "first_term",
+    "exp_grad_date",
+    "ft_pt",
+    "status",
+    "grad_date",
+    "session",
+    "term",
+    "course",
+    "course_version",
+    "course_description",
+    "units",
+    "fa_units",
+    "instructor",
+    "class_meetings_start",
+    "class_meetings_end",
+    "days_of_week",
+    "room",
+    "class_time_start",
+    "class_time_end"
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "output_columns": [
+    "id",
+    "dob",
+    "student_name",
+    "term",
+    "course",
+    "course_description",
+    "grade",
+    "units_attempted",
+    "units_completed",
+    "gpa_term",
+    "program_description",
+    "status",
+    "exp_grad_date",
+    "ft_pt",
+    "first_term",
+    "lda",
+    "session",
+    "grad_date"
+  ],
+  "record_separator": "Bayamon Community College",
+  "exclude_patterns": [
+    "17\\s+Calle\\s+Maceo",
+    "Bayam[o\\u00f3\\u00c3\\u00b3]+n,?\\s*PR\\s+\\d+",
+    "\\(787\\)\\s*780-4242",
+    "https?://bccpr\\.org",
+    "bccpr\\.org",
+    "Official Student Transcript",
+    "Not Official unless signed.*",
+    "_{5,}",
+    "Registrar",
+    "Wednesday,.*Page \\d+.*",
+    "Thursday,.*Page \\d+",
+    "^\\s*Absent\\s+Tardy\\s+Left Early",
+    "^\\s*Hours\\s+Hours\\s+Hours",
+    "^\\s*Term\\s+Course\\s+Attended",
+    "\\(Cumulative GPA\\)",
+    "Powered by TCPDF.*",
+    "^Course\\s+Course Description\\s+Grade\\s+Units",
+    "Attendance Summary",
+    "Total Required Hours.*",
+    "Total Attended Hours.*",
+    "Total Transfer Hours.*",
+    "Total Hours Remaining.*",
+    "Total Scheduled Hours.*",
+    "Attendance Percentage.*",
+    "Cumulative Total:.*",
+    "Term.*Total:.*"
+  ],
+  "student_fields": [
+    {
+      "name": "id",
+      "pattern": "ID:\\s*([A-Z0-9]+)"
+    },
+    {
+      "name": "dob",
+      "pattern": "DOB:\\s*(\\d{2}/\\d{2}/\\d{4})"
+    }
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff]+(?:\\s+[A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff]+)*,\\s*[A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff]+(?:\\s+[A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff]+)*)$",
+    "stop_at": "Program Description:"
+  },
+  "context_fields": [
+    {
+      "name": "term",
+      "pattern": "^Term:\\s*([\\w-]+)\\s*$",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "gpa_term",
+      "pattern": "Term[^:]*Total:\\s*\\d+\\.\\d{2}\\s+\\d+\\.\\d{2}\\s+(\\d+\\.\\d{2})",
+      "scope": "current_term_block",
+      "propagate_to": "data_rows",
+      "backfill": true
+    },
+    {
+      "name": "program_description",
+      "pattern": "Program Description:\\s*$",
+      "value_on_next_line": true,
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "status",
+      "pattern": "Status:\\s*(.+?)(?:\\s+Grad Date:|\\s+Session:|$)",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "exp_grad_date",
+      "pattern": "Exp Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "ft_pt",
+      "pattern": "FT/PT:\\s*(.+?)$",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "first_term",
+      "pattern": "First Term:\\s*(\\d{2}/\\d{2}/\\d{4})",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "lda",
+      "pattern": "LDA:\\s*([^\\n]*?)(?=\\s*Session:|$)",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "session",
+      "pattern": "Session:\\s*(.+?)$",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    },
+    {
+      "name": "grad_date",
+      "pattern": "Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})",
+      "scope": "until_next_match",
+      "propagate_to": "data_rows"
+    }
+  ],
+  "program_match": {
+    "strategy": "date_range",
+    "term_date_normalization": {
+      "formats": [
+        {
+          "pattern": "^(\\d{4})-(\\d{2})-(\\d{2})$",
+          "normalized": "{1}-{2}-{3}"
+        },
+        {
+          "pattern": "^[A-Z](\\d{2})(\\d{2})$",
+          "normalized": "20{2}-{1}-01"
+        }
+      ]
+    },
+    "range_start_field": "first_term",
+    "range_end_field_priority": [
+      "grad_date",
+      "exp_grad_date"
+    ],
+    "range_end_fallback": "next_program_block.first_term",
+    "date_format": "MM/DD/YYYY",
+    "reset_program_fields_on_new_block": true
+  },
+  "data_rows": {
+    "pattern": "^([A-Z]{2,4}\\d{3})\\s+(.+?)\\s+([A-FWIDw-]|-)\\s+(\\d+\\.\\d{2})\\s+(\\d+\\.\\d{2})\\s*$",
+    "columns": [
+      "course",
+      "course_description",
+      "grade",
+      "units_attempted",
+      "units_completed"
+    ],
+    "carry_context": true,
+    "transforms": {}
+  }
+}

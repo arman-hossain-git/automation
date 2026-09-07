@@ -1,0 +1,675 @@
+{
+  "version": "1.1",
+  "total_runs": 15,
+  "total_items_processed": 4747,
+  "total_files_handled": 1361,
+  "domain_profiles": {
+    "elaneinstitute.orbund.com": {
+      "xpaths": {
+        "username_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[1]/input": 3
+        },
+        "password_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[2]/div/input": 4
+        },
+        "login_button": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[5]/button": 4
+        },
+        "files_documents_menu_href": {
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=m1fOfWoYWfw9iNbv8yOPtEg7J2J1feVnbPxjW6dBKRk=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=YvoyR4y3JuszNXydfG2wxsDaX1+79WkI+Z/OdndOqS4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=AkGGgqDUYmrCicqA1AWwX20b0vxOytfX4IbAkSENK40=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=pZsjNewyp5O44zPCrF7Ex7ZPMe2giRaQdRM0lJAhzJo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=/VrXwc+UPJLQjVWzRdk2afCyYHUbYBvhqYELk5bPLYI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=osUkTjIEwOMV4buMEE9EqxiWPwyRLJ95B0qA/4mgdB0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=KXE63r1Sl5SvbUJ+BxRzXINjEJuI28a0BhBj6+RhZVQ=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Yjd2q9hbsd3xdth8uuVlvt2MZRy1JU+o0wjPLKiPwE0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=ROWxbanXgdEAq7fvu0uuSLM0jDv1ikdBVzAkI1X/5sI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=G61cIs0QZ1q8wynABa/n6W84ZkHl2tkI2c0uJo4IRaM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=REDCMAWIUuwdzCQy4GeygLRsPlDJpN//4bDPgWf/P84=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=u6WcbKPtOgr62vLGwqZKj+K29BlvncaVCGVFoWx+jOU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Xa/GlNUKWdPU9c5RlYAVnhsT3hjb+L8cU7OSl81m4OM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=d7IvuTVgHEx6CLoaEUN8+x52bm9+djDg5YNb6Jy3EjM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=4XcOq84caJPzPpVNJdvcDXjIsiSN39i9MoUZwacjLXw=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=nVOIQZGjI+wMaNCeDQrEI5ox0NFq+IIvgt0W6fDIMjc=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=CqR3ZsY9Y1pmSXKYdEND7yovqMuQH8iJWj0dQO71c0c=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Fit6bkubjOgS9ObW1eyVsDeMJRSfVwMUKfQJ3mg0gD8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=RyKVQmeDs7soaA2K1OCHqbX1+K2W/LEEn7dFo8sWdHM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=1TAHotGE8C/qnOZBF62lx4y8swVBlNHmkyl9yQQc6DU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=YySCGw3ArpwW0aO9hckl6hONcJ1RRCX+ZbZVsVpIjtI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=FvZW1a2jxI/A1hZeEifousDtP8TayHJ03zKFq5h5mog=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=rf0s2kPsGGFFnSsLjlx1MnxS9/TzG9CFWaUKPtAI4Gc=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=zpOy5v1wZ8QgGCWlAwkU7pzjEUPHSZ2ubbFC7DdZJSE=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=w0VQ3H6GOW8swdFTPmODGGO00kxpaLexGD+sHAPtjsc=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=i0BkbZhD3j6NS1QtvNXd/g4vWBzUVrAE6vn1Pme9y8U=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=AcoUJnXMj4Gzrp0beF+v1IHwjvbmwjSLZzTQPU1n7Ls=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=ZESfnpPKfhefnrqbZiy2oTLwHek3BPk/iBI4CX3OlFE=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=KU+HolDCtM8LgG4dgAH5VOwycmEbQD+UWR1qfr2MB+w=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=aShplmPPI+UZ667GVzceVw7kFyurPxnc0QJR0AWGfVM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=IJ1rD0ILrIW9TIqGcTBJNdWLT0r2Ht+WxCl9zrszsXE=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Zcz8WcQKMwHTNq1hkvBX3zLw40SmeQZ/G6sP0fwUeI0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=yUgWnv5Ct2DDVf30lOfMDNP480O2zfB4pRmjrjxnYDU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=7VkNY1RUvcSIVVqMKPq/VA2zECud+wLK1H/MDAHvuYM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=NYYR8cm0qK+C5LCuSFGSeudcv9kiJUTkBxbbC385ukU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=8iheS+helAWoBnZD4f3DZsuU4FuRarMtrkJ/xpKB/1U=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=rImA+Z8hmPDmUhpEEClIGPhC/lNkurlJ7aJfp0Z0rJ0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=b/J/ayJyHjaWDp448Q2G32kGSAnCDPtUUhGrI5QmAEA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=FUoiBFnLyyy9hLoUfaThY3PXARoPnGVmVFg2VBdiQBo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=cJgdmsZ+dIS6PsCZ9JvHnW7BgHT17ZbiYs82pydjq3s=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=QHl9sr4Op8m1p64VlIuvCsz6dQ1+bEpOHJ7za4wCmzM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=yi5Jw7y0viLqpEZSMRMhv5DmFFC8cRpV5JxB7I2S+8A=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=nUVrCLtlidgOcRwjSrEM3e+9CvAnkYxewCF2POMKNeY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=AuUO65s/CXxjQ+SIeawYNOUvhK67uIQsDynvcv5rT0E=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=x2wye1o4ryTe3Zlx3nzAqvK1jG3mvdCxldrlOW7h3sc=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=nXSBgLS4fR/wXOFc1TIvRgVA8TN33zfFO2z4EkkvAe4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=sjh49m4LzjKlbSaiYhcLvLYYbcM0iqGcnEArP/5HsjY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=2MO7dcvhxXWjMvnze4NqPb6aIs49C7IaM7a6PpAviU4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=t7AuE4K1g9g2jjraKNLctCSCbtWDYnhr6sTS20QcRq8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=cHXuftFCZWyrPXUbOJ/RL4S8hhXOpPWjNZFLu6awhYY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=B0KsyKBI+tFoxaGfX//p1+GlQB8ul8RpKUEVHaY0ay4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=4I76Ter2UXJB8VU2cLkSyr/ZATX5F3HQFA3vHZgt3bM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=OUe41F1phV2QZswYqQmbGfx0HTxJJYApQ0TPxwIpWQg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=uqT8wlIl+30ZXutUQnoGLzjBsD6fuzy5P12ZPRbaUSo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=HgBYnFFEoFBwuH0zqmLfS2UQM/1wVJcCFCypbPiivTY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=0MDlonbBw1Wocjc5dM+A77zrDxMlD1+RXRtmRtIUmTE=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=/nchUAKrHz91q+t0y/M27+i7819MQGr2I+KT4QYKwdI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=d7V0AafaLiGkns6+RTCGoZj5GGbBZ59n6/eqawo9yR4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=A9SKyknRaJZb0rtT3MzRidYKJtfAF57IhvxQohS8aKU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=u57UkOoGBCP7x5uDz+UIFaSdgXpYamHTAarc1Jo9WnY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=ne/catXj4L4D8UU43NpYKQyiDC7kGO0SB9pJvSHhxyU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=EDjFa5mfIBVosqFlXemb/mqy68tjT3HTgoGrZyoKsLA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=fYC+L61h7ZA8wWEp65nhHCvifpd4ophGpz2UdjGgK4k=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=fA4E1t+xKv2qQewv8betCogL0TJ667+MoqIf3HqTVP4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=SVZn8gCbcnRcHpPdcCQoDfQFt58OqEEbSS/iS2R/KUM=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=/gzaDU2TvfexhQv/avn5qEDvGAzuG8OY/4dim5WLMns=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=9oF3VE9+Ed76lDtiRgTkBqr50iZdWwnVuywzAUPuF60=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=DDBXGXUmU+LzUMzQvqrvkvDpOdZ+O4185o/CMxFRJLc=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=8fPo+2a+VwxyBrYSDmIUhXAt99O5JoNV2ihBEfc84cY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=+oIEHVDvFBNpRc0CTsAoi3rTF003DEBNDrO4kzeTNcU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=8+G0Dr8iB4HirF7HcP1eqxTFQ4X8AlBh2Bc8Ugcbk80=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=fNLA2vg7WZdOgt7C0X+NHXcghnr6T45D/3WsibsVVxo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=sUW0wH9LHBK+UK3bWb2VFcuWwoJP6XV7Ebe1MsbEAaI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=zVWiyzXJDfEcJibV63qyZLkhiQ+kplh8YXaFAJo3UTI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=hadH2b0l2WAwQufrPRzT2GljnSLBCvvLdgHL8Pb4qPo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=UuPfpme0ujRElFwcBFkbgDFWJVWaZDNLhfV/xPRY4E0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=QGdCGZ28bEFMjuu7sxhlIPdYQjp0LKh4vd6vYdTkISE=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=ekZHPStNoKxL/quW4uPJ7ZIhXikjEugunxiJAnp/sDY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=dFHBns6xIf7wn/Ks0QjEScuGeKFzdszR9qa/ejbh4XY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=ER1tR1SQL9LPbK1YGLmk2O/5gDNHhBsFtolKkjMZpsg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=R+u6vMq6MBIJX/0UaejU/iBdMdDcrDBWai25yDHio0k=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=+t9mMGDAf8M6EjltdQRJzevGov5b5dxdDc0arEcc4ww=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=GLiQURK7KDeoxuiYSNvxOxAdkdUfFmavO9umgv5LKs0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=sjGKTkK6bE2S3YUpa7sh8/Zl8p8j7/p2XOPluZZavW8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=/foHL+/ie9x0MgNyHFMPMB8mJtaVvzk3DVi5xT5nI/Q=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=X0R1Exq0zCaVaa/bGwsFVCC0HYlkyZNSFvNcJb+GGOY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=25Mlf4eWfQH6sw+wVI+KmfzJ/vbqwXnLHqM6dESn6hQ=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=v3tp/Rw+Q51zO8LB/lJ2N8WsuI8/14P3BAL0xRpoW3Y=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=SO4XYMskZTdFVRM2y7IRzYTMoaPgQSYRLo3LXp8toUs=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=F857GuVD+yP4GW3Yh57oJSR8ZY7suVgoiEO2nN97jfs=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=D9phE+bHx4Fdtb0XcYFGjMoPUqPp3JcNI9LJc1fEp08=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=i7UEUka7gF952WXWjBoCloWUmT7/5afxWacS+DQ6Nok=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=hU3uWp4qTjzf7Ko+V8IMtB0lXq3z5TMKU+RcIDF60ag=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=cc0sON2dFcI00NojnaDwo+yQIun6jtEGFOzJi8eKz0Y=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=8Cy1BnDpzncDgoqxK3ePUg6a9dmTEnBFwJ9M6PzNzR8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=KXCxH5HjgwUUgIYnajc5jpjwJMcy8/XhMr0ldhLYoaw=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=lo3m8b0n+xjQ4XUrEh1Gr9RZeICFNhyGRWvXuFZ3LLY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=vzcnsos2b7S2hIaPch2X47FHcrXMRS56+AKGnAXOkQA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=SJ66DRT1TCP3eVTv5VdndDikSpApN9HiOPWw9F3uyhk=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=MlduKxy7CHga0EV3pwcXCNr+csFDCetpxz+SiIEXuSw=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=h9yRAqAlqjcMfly1rhAw/zwMCFnhzbTiHwoyAcRCA04=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=gHTO9+aDwcLxVahtgn4UpgBxAD+ro4n1B6h6jjPp7Dg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=gMkYJimps5tyUdjiSsW8ePkTDBtZrpxrRVC5xp3aaU0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=VDshNRRhk9C3KNq/q5lJIg+iRT03HdpaaWtx+SxKsCY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=t/UaAHNDatdpI4R2DygOLzWxHlE69n101uRXxQRhjYQ=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Y5x1mkB/du9P7o/i3624lP48Xsduhek95zka/3z3ens=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=gVv0GegIt7pLfg89POrzRo6KG9d7HUaIOM9Tqn0TOFA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=eBtR4cuyfneesYRhSfvb9eSXTcLQawGZZGv+2VX7TzU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Zx+fa+vgLnCtjT5ZKl+oWjEIBQhwn9Q+BwQ/W/ROBCc=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=m/qCEJzmQjHW+H8syxK6qqh13CgeeyUw9pEMMWw7LPo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=oRwlfQpcEjKXxCEfnx7Wi/+0ioxv3pE518yu7IQQaDY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=VA0EpeDszzw5g+nqXd081XqcMvY7bq258Qq8WM9uHws=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=SvinUFJlrQPeEH5l4R68jIKXqLfg8HT4J+Kndud4yok=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=plQNlC7I+YPnglr7u9OPJ8erQC1lhtn9azxqDyFWStg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=kq6lK7sJKgZpg3O3XOnXqriIKsOWFBI4SPKX0lAngmk=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=4mZenphLuZ1lVUn4pEr0B2GUS8o3HyeJNMQPatkfiL8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=xi0TbsGfBTll3K5zLnEfJEdcTPLU7MZbOoSanCqifXQ=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=BZ7t/0dBb49nmEwC7WvOz0ABYV1g3WONWcpaPlR5+AY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=HC3Pp0maPh9egNlvtIDrCwikQWxdFO5pkn1tVaXiKkg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=uZ+mCG86C0UloEQ/sLdxJp1MCntIvns1irRL8/myQNs=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=FZIgbk/gwsPexQ/yy/GIGTiNza/F2UYOgTBtTEG0Lio=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=0tJe3uBgRMFC1qXTgr6B34ETqvQS7tFwRl/wtOpTvX4=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=7clmJc6C/beTkTKpqxZ5wxTJw/n2K082BiWcgviHhME=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=tIAl0Ov7L1O3uf20PhiWAqr2p+yiRbqWFq+qAX/5tSo=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=zuucsWOHyEyxjT8hW34WUTBFx4XphZihl0VB43OS430=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=gHMFP3uVhYmi/oyYDZP8RKvytYRv+PyUYFbeHnDRJBY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=PndQqa6kv9uOu3pdkahSisVwBpn+NwqSvfkKJHtw6D8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=XXogcjxikfXaAGheHAkKg10Q1PdZW1QKj7FgTv4pm3I=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=qKLv/ZMCmjSy8FEFyH1BuHppKRo+mg5mlTuNXcrmMHw=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=rvI8zCibGnatdGFQM4VF4JZg++ma/EvxK9oK5qq9ACA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=gRCRGrQ++RzZuFNYKqAgAbT/M0HWdTn3EbC28/cAFQQ=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=37DmpkKwsfmI2+q0P5HYk88DbheGJb+22LZDhN//xG0=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=OSVyKIezsgHwwR0OYiDglYz0+GKwp35XdCOBCkWAQ7w=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=bg6woOqcI5e5YCblOlvYo4jgsEOLd/lfXHjchbG3+TU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=2CFUz6Ef+0q6EmuWswqMOvy0BfRpNDdd8tWbBNj3JoI=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=yGhyMqnh3hlRiqM56L1x8qpj+371p4KcDrbhGo4cKJU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=mY089Tq/HUtMvcTaRA660YZYZTcJ0voEAK7PymU2zOY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Kafv4qJ/dzUJ9z0KPSBqR6t3+SDzFQh6ABGtsAjAeGg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=2W0qv8ryBloHhFFTLWqbPhrqosVNh1rXkMbeXZspFQU=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=aIflC4xQIzEAJZvCbz9Ug0mrwdKFjCjCYZgRFatdwdk=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=Qf00tPrCE+LOVwmAxpUj8dtRaFv+k+B9crE4ye8hBpQ=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=jUGonTFqRll3XHuOgopFxjqAsHSHqleqm2ToIj+adSs=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=CR23Ln6TRG/usPQ9C6P92gEL6t9KmVihAhiYqZN+jo8=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=LLop8WhVejaXJ11VcXyGvqbxolZGj6xEndkoQ8RBzao=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=LC8eGTbu8fwgE6t7/HqsTHIB1v/9C2VDQZy23/B62FA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=qQO91b+2Ii8ycywY/IGF6vAW7CPiqGulAJxfMJwaPLk=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=McxNpO5lKZEDdOjShOM7zVphJ4jVjK1F0aSiNEBKtvg=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=pkF9L/lQNum18yFqfD1ZND2KGcXyShK0uZ3X2yf8IDY=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=aY+LTMfJ/5+IB6knhRkasVX+hh3T98rQkaN2KG29oVA=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=LR/CU2F6SapYunHZC1J543wALeL8NNxvwwEPnx9nhio=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=A/BvEjkS5qJBkLzu4exPt8SANBPSNGErI2zpZixdVFw=": 1,
+          "https://elaneinstitute.orbund.com/einstein-freshair/touch/files_and_documents.jsp?param=R81047Ee/8q1ZQ6ZD8Oa2Bgkk32iPl0rBbLF6ezjATQ=": 1
+        }
+      },
+      "latencies": {
+        "page_load": 4.544
+      },
+      "strategies": {
+        "files_documents_last_successful_strategy": "href pattern match"
+      }
+    },
+    "huertas.orbund.com": {
+      "xpaths": {
+        "username_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[1]/input": 6
+        },
+        "password_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[2]/div/input": 6
+        },
+        "login_button": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[5]/button": 6
+        }
+      },
+      "latencies": {
+        "page_load": 7.605
+      }
+    },
+    "bcc.orbundsis.com": {
+      "xpaths": {
+        "username_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[1]/input": 5
+        },
+        "password_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[2]/div/input": 5
+        },
+        "login_button": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[5]/button": 5
+        }
+      },
+      "latencies": {
+        "page_load": 2.532
+      }
+    }
+  },
+  "record_insights": {
+    "2409-7443": {
+      "list_category": "Withdrawn"
+    },
+    "BCC16102": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC16037": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19304": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19379": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19387": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19359": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19390": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19368": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19383": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19391": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19381": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC15434": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19377": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19351": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19363": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19357": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19389": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19394": {
+      "list_category": "Regular",
+      "grade_field_type": "Adjust Score"
+    },
+    "BCC19367": {
+      "list_category": "Regular"
+    },
+    "BCC19325": {
+      "list_category": "Regular"
+    },
+    "BCC19312": {
+      "list_category": "Regular"
+    },
+    "BCC19342": {
+      "list_category": "Regular"
+    },
+    "BCC19337": {
+      "list_category": "Regular"
+    },
+    "BCC19326": {
+      "list_category": "Regular"
+    },
+    "BCC19317": {
+      "list_category": "Regular"
+    },
+    "BCC19332": {
+      "list_category": "Regular"
+    },
+    "BCC19339": {
+      "list_category": "Regular"
+    },
+    "BCC17585": {
+      "list_category": "Regular"
+    },
+    "BCC19319": {
+      "list_category": "Regular"
+    },
+    "BCC19330": {
+      "list_category": "Regular"
+    },
+    "BCC19331": {
+      "list_category": "Regular"
+    },
+    "BCC18893": {
+      "list_category": "Regular"
+    },
+    "BCC19308": {
+      "list_category": "Regular"
+    },
+    "BCC19346": {
+      "list_category": "Regular"
+    },
+    "BCC19302": {
+      "list_category": "Regular"
+    },
+    "BCC19335": {
+      "list_category": "Regular"
+    },
+    "BCC19297": {
+      "list_category": "Regular"
+    },
+    "BCC19347": {
+      "list_category": "Regular"
+    },
+    "BCC19322": {
+      "list_category": "Regular"
+    },
+    "BCC19315": {
+      "list_category": "Regular"
+    },
+    "BCC19321": {
+      "list_category": "Regular"
+    },
+    "BCC19333": {
+      "list_category": "Regular"
+    },
+    "BCC19313": {
+      "list_category": "Regular"
+    },
+    "BCC19314": {
+      "list_category": "Regular"
+    },
+    "BCC19340": {
+      "list_category": "Regular"
+    },
+    "BCC19241": {
+      "list_category": "Regular"
+    },
+    "BCC19249": {
+      "list_category": "Regular"
+    },
+    "BCC19209": {
+      "list_category": "Regular"
+    },
+    "BCC19382": {
+      "list_category": "Regular"
+    },
+    "BCC17510": {
+      "list_category": "Regular"
+    },
+    "BCC14451": {
+      "list_category": "Regular"
+    },
+    "BCC19378": {
+      "list_category": "Regular"
+    },
+    "BCC19356": {
+      "list_category": "Regular"
+    },
+    "BCC19386": {
+      "list_category": "Regular"
+    },
+    "BCC19352": {
+      "list_category": "Regular"
+    },
+    "BCC19380": {
+      "list_category": "Regular"
+    },
+    "BCC18800": {
+      "list_category": "Regular"
+    },
+    "BCC14914": {
+      "list_category": "Regular"
+    },
+    "BCC19355": {
+      "list_category": "Regular"
+    },
+    "BCC19373": {
+      "list_category": "Regular"
+    },
+    "BCC19348": {
+      "list_category": "Regular"
+    },
+    "BCC19273": {
+      "list_category": "Regular"
+    },
+    "BCC19295": {
+      "list_category": "Regular"
+    },
+    "BCC18215": {
+      "list_category": "Regular"
+    },
+    "BCC19300": {
+      "list_category": "Regular"
+    },
+    "BCC19260": {
+      "list_category": "Regular"
+    },
+    "BCC19261": {
+      "list_category": "Regular"
+    },
+    "BCC19269": {
+      "list_category": "Regular"
+    },
+    "BCC19299": {
+      "list_category": "Regular"
+    },
+    "BCC19259": {
+      "list_category": "Regular"
+    },
+    "BCC19291": {
+      "list_category": "Regular"
+    },
+    "BCC19293": {
+      "list_category": "Regular"
+    },
+    "BCC19287": {
+      "list_category": "Regular"
+    },
+    "BCC19292": {
+      "list_category": "Regular"
+    },
+    "BCC19298": {
+      "list_category": "Regular"
+    },
+    "BCC19276": {
+      "list_category": "Regular"
+    },
+    "BCC19266": {
+      "list_category": "Regular"
+    },
+    "BCC19280": {
+      "list_category": "Regular"
+    },
+    "BCC19289": {
+      "list_category": "Regular"
+    },
+    "BCC19263": {
+      "list_category": "Regular"
+    },
+    "BCC19279": {
+      "list_category": "Regular"
+    },
+    "BCC19265": {
+      "list_category": "Regular"
+    }
+  },
+  "run_history": [
+    {
+      "timestamp": "2026-08-31 18:37:11",
+      "module": "File Uploader",
+      "total_items": 149,
+      "success_count": 131,
+      "failed_count": 18,
+      "total_files": 1275,
+      "duration_sec": 6308.5,
+      "avg_speed_sec_per_item": 42.34,
+      "success_rate_pct": 87.9
+    },
+    {
+      "timestamp": "2026-08-31 19:02:53",
+      "module": "File Uploader",
+      "total_items": 19,
+      "success_count": 2,
+      "failed_count": 17,
+      "total_files": 13,
+      "duration_sec": 107.5,
+      "avg_speed_sec_per_item": 5.66,
+      "success_rate_pct": 10.5
+    },
+    {
+      "timestamp": "2026-08-31 19:31:41",
+      "module": "File Uploader",
+      "total_items": 18,
+      "success_count": 9,
+      "failed_count": 9,
+      "total_files": 36,
+      "duration_sec": 443.6,
+      "avg_speed_sec_per_item": 24.65,
+      "success_rate_pct": 50.0
+    },
+    {
+      "timestamp": "2026-09-01 09:58:57",
+      "module": "File Uploader",
+      "total_items": 9,
+      "success_count": 9,
+      "failed_count": 0,
+      "total_files": 37,
+      "duration_sec": 303.8,
+      "avg_speed_sec_per_item": 33.75,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-09-03 15:47:17",
+      "module": "Grade Submission",
+      "total_items": 2,
+      "success_count": 0,
+      "failed_count": 2,
+      "total_files": 0,
+      "duration_sec": 92.0,
+      "avg_speed_sec_per_item": 46.02,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-09-03 15:58:13",
+      "module": "Grade Submission",
+      "total_items": 2,
+      "success_count": 0,
+      "failed_count": 2,
+      "total_files": 0,
+      "duration_sec": 141.9,
+      "avg_speed_sec_per_item": 70.97,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-09-03 15:59:45",
+      "module": "Grade Submission",
+      "total_items": 2,
+      "success_count": 0,
+      "failed_count": 2,
+      "total_files": 0,
+      "duration_sec": 64.0,
+      "avg_speed_sec_per_item": 32.0,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-09-03 16:03:34",
+      "module": "Grade Submission",
+      "total_items": 2,
+      "success_count": 0,
+      "failed_count": 2,
+      "total_files": 0,
+      "duration_sec": 81.0,
+      "avg_speed_sec_per_item": 40.5,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-09-03 16:05:54",
+      "module": "Grade Submission",
+      "total_items": 2,
+      "success_count": 0,
+      "failed_count": 2,
+      "total_files": 0,
+      "duration_sec": 79.5,
+      "avg_speed_sec_per_item": 39.76,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-09-03 16:08:14",
+      "module": "Grade Submission",
+      "total_items": 2,
+      "success_count": 2,
+      "failed_count": 0,
+      "total_files": 0,
+      "duration_sec": 84.6,
+      "avg_speed_sec_per_item": 42.29,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-09-04 19:18:14",
+      "module": "Grade Submission",
+      "total_items": 908,
+      "success_count": 14,
+      "failed_count": 894,
+      "total_files": 0,
+      "duration_sec": 188.6,
+      "avg_speed_sec_per_item": 0.21,
+      "success_rate_pct": 1.5
+    },
+    {
+      "timestamp": "2026-09-04 19:21:27",
+      "module": "Grade Submission",
+      "total_items": 908,
+      "success_count": 4,
+      "failed_count": 904,
+      "total_files": 0,
+      "duration_sec": 72.1,
+      "avg_speed_sec_per_item": 0.08,
+      "success_rate_pct": 0.4
+    },
+    {
+      "timestamp": "2026-09-04 19:28:28",
+      "module": "Grade Submission",
+      "total_items": 908,
+      "success_count": 3,
+      "failed_count": 905,
+      "total_files": 0,
+      "duration_sec": 61.4,
+      "avg_speed_sec_per_item": 0.07,
+      "success_rate_pct": 0.3
+    },
+    {
+      "timestamp": "2026-09-04 19:30:45",
+      "module": "Grade Submission",
+      "total_items": 908,
+      "success_count": 3,
+      "failed_count": 905,
+      "total_files": 0,
+      "duration_sec": 60.7,
+      "avg_speed_sec_per_item": 0.07,
+      "success_rate_pct": 0.3
+    },
+    {
+      "timestamp": "2026-09-04 22:15:11",
+      "module": "Grade Submission",
+      "total_items": 908,
+      "success_count": 908,
+      "failed_count": 0,
+      "total_files": 0,
+      "duration_sec": 9779.2,
+      "avg_speed_sec_per_item": 10.77,
+      "success_rate_pct": 100.0
+    }
+  ],
+  "devtools_requirements": {
+    "elaneinstitute.orbund.com": {
+      "off_failures": 0,
+      "off_successes": 0,
+      "on_failures": 0,
+      "on_successes": 4,
+      "confirmed_required": false,
+      "last_updated": "2026-09-01 09:58:57"
+    },
+    "huertas.orbund.com": {
+      "off_failures": 0,
+      "off_successes": 0,
+      "on_failures": 5,
+      "on_successes": 1,
+      "confirmed_required": false,
+      "last_updated": "2026-09-03 16:08:14"
+    },
+    "bcc.orbundsis.com": {
+      "off_failures": 0,
+      "off_successes": 0,
+      "on_failures": 0,
+      "on_successes": 5,
+      "confirmed_required": false,
+      "last_updated": "2026-09-04 22:15:11"
+    }
+  }
+}

@@ -561,6 +561,12 @@ class ConfigurableExtractor:
                 flags = re.MULTILINE
             m = re.search(sf["pattern"], block, flags)
             results[sf["name"]] = m.group(1).strip() if m else 'N/A'
+        # Apply computed_fields: merge existing fields into a new field
+        for cf in self.config.get("computed_fields", []) or []:
+            parts = [results.get(src, 'N/A') for src in cf.get("join", [])]
+            sep = cf.get("sep", " ")
+            non_na = [p for p in parts if p and p != 'N/A']
+            results[cf["name"]] = sep.join(non_na) if non_na else 'N/A'
         return results
 
     def _extract_student_ledger_data_rows(self, block):

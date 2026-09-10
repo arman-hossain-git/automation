@@ -1,0 +1,115 @@
+{
+  "record_separator": "Student Ledger",
+  "exclude_patterns": [
+    "17\\s+Calle\\s+Maceo",
+    "Bayam[o\\u00f3\\u00c3\\u00b3]+n,?\\s*PR\\s+\\d+",
+    "\\(787\\)\\s*780-4242",
+    "https?://bccpr\\.org",
+    "Wednesday,.*Page \\d+",
+    "Thursday,.*Page \\d+",
+    "Powered by TCPDF.*",
+    "^Trans Date Ledger Code Description"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+,\\s*[A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+)$",
+    "stop_at": "Program Description:"
+  },
+  "summary_fields": [
+    {
+      "name": "campus",
+      "pattern": "Campus:\\s*([A-Za-z]+)"
+    },
+    {
+      "name": "program_description",
+      "pattern": "Program Description:\\s*(.+?)(?:\\s+Drop Date:|\\n)"
+    },
+    {
+      "name": "program_continuation",
+      "pattern": "Program Description:[^\\n\\r]+\\n\\s*([A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+?)\\s*\\nFirst Term:"
+    },
+    {
+      "name": "drop_date",
+      "pattern": "Drop Date:\\s*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "group",
+      "pattern": "Group:\\s*(\\S+)"
+    },
+    {
+      "name": "first_term",
+      "pattern": "First Term:\\s*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "exp_grad_date",
+      "pattern": "Exp Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "ft_pt",
+      "pattern": "FT/PT:\\s*(.+?)$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "status",
+      "pattern": "Status:\\s*(.+?)(?:\\s+Grad Date:|\\s+Session:|$)"
+    },
+    {
+      "name": "grad_date",
+      "pattern": "(?<!Exp )Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "session",
+      "pattern": "Session:\\s*(.+?)$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "total_debit",
+      "pattern": "^\\s*\\$\\s*([\\d,.]+)\\s+\\$\\s*[\\d,.]+\\s+\\$\\s*[-?\\d,.]+\\s*$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "total_credit",
+      "pattern": "^\\s*\\$\\s*[\\d,.]+\\s+\\$\\s*([\\d,.]+)\\s+\\$\\s*[-?\\d,.]+\\s*$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "ending_balance",
+      "pattern": "^\\s*\\$\\s*[\\d,.]+\\s+\\$\\s*[\\d,.]+\\s+\\$\\s*([-?\\d,.]+)\\s*$",
+      "flags": "MULTILINE"
+    }
+  ],
+  "data_rows": {
+    "pattern": "^(\\d{2}/\\d{2}/\\d{4})\\s+([A-Za-z0-9\\-]+)\\s+(.+?)\\s+\\$\\s*([-\\d,.]+)\\s+\\$\\s*([-\\d,.]+)\\s+\\$\\s*([-\\d,.]+)$",
+    "columns": [
+      "trans_date",
+      "ledger_code",
+      "description",
+      "debit",
+      "credit",
+      "balance"
+    ]
+  },
+  "output_columns": [
+    "student_name",
+    "campus",
+    "program_description",
+    "program_continuation",
+    "drop_date",
+    "group",
+    "first_term",
+    "exp_grad_date",
+    "ft_pt",
+    "status",
+    "grad_date",
+    "session",
+    "trans_date",
+    "ledger_code",
+    "description",
+    "debit",
+    "credit",
+    "balance",
+    "total_debit",
+    "total_credit",
+    "ending_balance"
+  ]
+}

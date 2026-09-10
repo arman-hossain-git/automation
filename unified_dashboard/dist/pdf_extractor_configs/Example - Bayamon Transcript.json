@@ -1,0 +1,112 @@
+{
+  "record_separator": "Bayamon Community College",
+  "exclude_patterns": [
+    "17\\s+Calle\\s+Maceo",
+    "Bayam[o\\u00f3\\u00c3\\u00b3]+n,?\\s*PR\\s+\\d+",
+    "\\(787\\)\\s*780-4242",
+    "https?://bccpr\\.org",
+    "bccpr\\.org",
+    "Course Offering Grade Book Transcript",
+    "Student Transcript",
+    "Official Signature:",
+    "Thursday,.*Page \\d+",
+    "^\\s*Absent\\s+Tardy\\s+Left Early",
+    "^\\s*Hours\\s+Hours\\s+Hours",
+    "^\\s*Term\\s+Course\\s+Attended",
+    "\\(Cumulative GPA\\)"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+,\\s*[A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+)$",
+    "stop_at": "Program Description:"
+  },
+  "address_block": {
+    "output_column": "address",
+    "stop_prefixes": [
+      "Program Description:",
+      "First Term:",
+      "Status:",
+      "FT/PT:",
+      "Exp Grad Date:",
+      "Grad Date:",
+      "Drop Date:",
+      "Group:",
+      "Session:"
+    ]
+  },
+  "repeating_sections": [
+    {
+      "name": "program",
+      "marker": "Program Description:",
+      "marker_line_fields": [
+        {
+          "name": "drop_date",
+          "pattern": "Drop Date:\\s*(\\d{2}/\\d{2}/\\d{4})"
+        },
+        {
+          "name": "group",
+          "pattern": "Group:\\s*(\\S+)"
+        }
+      ],
+      "next_line_value": {
+        "name": "program"
+      },
+      "sub_fields": [
+        {
+          "name": "first_term",
+          "pattern": "First Term:\\s*(\\d{2}/\\d{2}/\\d{4})"
+        },
+        {
+          "name": "exp_grad_date",
+          "pattern": "Exp Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})"
+        },
+        {
+          "name": "ft_pt",
+          "pattern": "FT/PT:\\s*(.+?)$"
+        },
+        {
+          "name": "status",
+          "pattern": "Status:\\s*(.+?)(?:\\s+Grad Date:|\\s+Session:|$)"
+        },
+        {
+          "name": "grad_date",
+          "pattern": "Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})"
+        },
+        {
+          "name": "session",
+          "pattern": "Session:\\s*(.+?)$"
+        }
+      ]
+    }
+  ],
+  "summary_fields": [
+    {
+      "name": "cumulative_gpa",
+      "pattern": "Transferred:.*?(\\d+\\.\\d+)\\s*$",
+      "flags": "MULTILINE"
+    }
+  ],
+  "data_rows": {
+    "pattern": "^(\\d{2}/\\d{2}/\\d{4})\\s+([A-Z]+\\d+)\\s+\\(O\\s*-\\s*(\\d+)\\)\\s+(\\d+\\.?\\d*)\\s+(\\d+\\.?\\d*)\\s+(\\d+\\.?\\d*)\\s+(\\d+)\\s+(\\d+\\.?\\d*)\\s+(\\d+)\\s+(\\d+\\.?\\d*)\\s+(\\d+)\\s+(\\d+\\.?\\d*)\\s+(\\d+\\.?\\d*)\\s+%\\s+(\\d+\\.?\\d*)\\s+([A-FW])$",
+    "columns": [
+      "term",
+      "course",
+      "course_version",
+      "hours_attended",
+      "hours_missed",
+      "hours_scheduled",
+      "absent_count",
+      "absent_hours_missed",
+      "tardy_count",
+      "tardy_hours_missed",
+      "left_early_count",
+      "left_early_hours_missed",
+      "attendance_percentage",
+      "numeric_grade",
+      "final_grade"
+    ],
+    "transforms": {
+      "course_version": "lambda v: f'O-{v}'"
+    }
+  }
+}

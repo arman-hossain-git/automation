@@ -1,0 +1,21 @@
+{
+  "headless": false,
+  "auto_open_devtools": true,
+  "download_timeout": 30,
+  "max_action_wait_seconds": 20,
+  "max_retries": 3,
+  "retry_wait_seconds": 1,
+  "log_level": "INFO",
+  "theme_accent": "#4f9cf9",
+  "default_download_dir": "",
+  "auto_clear_logs_on_start": false,
+  "confirm_on_abort": true,
+  "auto_apply_learned_devtools": true,
+  "inter_task_timeout_minutes": 1,
+  "theme": "dark",
+  "file_uploader_last_target_folder": "(None - upload to Files & Documents root)",
+  "file_uploader_last_cred_path": "E:/Projects/Program/EMI/DE-4535/work/credentials - Upload.txt",
+  "file_uploader_last_links_path": "E:/Projects/Program/EMI/DE-4535/work/Profile Links - remaining.csv",
+  "file_uploader_last_source_dir": "E:/Projects/Program/EMI/DE-4535/work/storage",
+  "pdf_extractor_last_preset": "BCC Trans"
+}

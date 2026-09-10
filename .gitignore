@@ -1,0 +1,31 @@
+# Data files
+*.xlsx
+*.csv
+*.log
+
+# PDFs (source data)
+*.pdf
+*.PDF
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+unified_dashboard/build/
+unified_dashboard/dist/*.exe
+unified_dashboard/dist/*.pkg
+
+# Scratch/temp
+export test/
+upload test/
+pd to data/
+
+# Windows
+desktop.ini
+
+# IDE
+.vscode/
+.idea/

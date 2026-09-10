@@ -1,0 +1,704 @@
+{
+  "version": "1.1",
+  "total_runs": 67,
+  "total_items_processed": 6794,
+  "total_files_handled": 776,
+  "domain_profiles": {
+    "webapps.pcrsoft.com": {
+      "xpaths": {
+        "username_field": {
+          "//input[contains(@id, 'txtUsername') or @type='email' or @type='text']": 8
+        },
+        "password_field": {
+          "//input[@type='password']": 8
+        },
+        "login_button": {
+          "/html/body/div[1]/form/div[4]/div/div/div[3]/div/table/tbody/tr/td/a/input": 8
+        }
+      },
+      "latencies": {
+        "page_load": 16.486
+      },
+      "strategies": {
+        "interaction_mode": "static_links"
+      }
+    },
+    "my-path.online": {
+      "xpaths": {
+        "username_field": {
+          "//input[@type='email'] | //input[contains(translate(@id,'USERNAM','usernam'),'user')] | //input[contains(translate(@name,'USERNAM','usernam'),'user')] | //input[@type='text']": 17
+        },
+        "password_field": {
+          "//input[@type='password']": 17
+        },
+        "login_button": {
+          "//button[@type='submit'] | //input[@type='submit'] | //button[contains(translate(.,'LOGIN','login'),'log in')] | //button[contains(translate(.,'LOGIN','login'),'login')] | //button[contains(translate(.,'SIGNIN','signin'),'sign in')]": 17
+        }
+      },
+      "latencies": {
+        "page_load": 2.686
+      },
+      "strategies": {
+        "interaction_mode": "generate_documents",
+        "interaction_mode::academics": "generate_documents",
+        "mypath_section_names": [
+          "Academics",
+          "Finances",
+          "Graduation",
+          "Receipts"
+        ],
+        "interaction_mode::documents": "mypath_documents",
+        "interaction_mode::graduation": "generate_documents"
+      }
+    },
+    "kwi.orbundsis.com": {
+      "xpaths": {
+        "username_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[1]/input": 12
+        },
+        "password_field": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[2]/div/input": 13
+        },
+        "login_button": {
+          "/html/body/div[1]/table/tbody/tr/td/div/form/div/div[2]/div[5]/button": 13
+        },
+        "files_documents_menu_href": {
+          "https://kwi.orbundsis.com/einstein-freshair/touch/files_and_documents.jsp?param=hrTZwlvDuAbYuMAa7yIHsALNNCflN8oyON2oGu6KRG4=": 1,
+          "https://kwi.orbundsis.com/einstein-freshair/touch/files_and_documents.jsp?param=PeVZKkrvsk+mTw0Qt2Dme91nyu+qOqx/VwJ9oyo6klY=": 1,
+          "https://kwi.orbundsis.com/einstein-freshair/touch/files_and_documents.jsp?param=y9q3gnmAHxxcqdBNRkO4UfN+0m7cOTyWSgT66Qi9u60=": 1
+        }
+      },
+      "latencies": {
+        "page_load": 11.808
+      },
+      "strategies": {
+        "files_documents_last_successful_strategy": "href pattern match"
+      }
+    }
+  },
+  "record_insights": {
+    "346641331": {
+      "has_files": true
+    },
+    "10002835": {
+      "has_files": true
+    },
+    "68801160993448e7c5611373": {
+      "has_files": false
+    },
+    "68801160993448e7c5611375": {
+      "has_files": true
+    },
+    "6904feeb9ea0913dec62d5e1": {
+      "has_files": true,
+      "file_count": 1
+    },
+    "6904feeb9ea0913dec62d5e2": {
+      "has_files": true,
+      "file_count": 5
+    },
+    "6904feeb9ea0913dec62d5e3": {
+      "has_files": true,
+      "file_count": 6
+    },
+    "6904feeb9ea0913dec62d5e4": {
+      "has_files": true,
+      "file_count": 4
+    },
+    "6904feeb9ea0913dec62d5e5": {
+      "has_files": true,
+      "file_count": 9
+    },
+    "6904feeb9ea0913dec62d5e6": {
+      "has_files": false
+    },
+    "009": {
+      "folder_exists_Profile Docs": true
+    },
+    "007": {
+      "folder_exists_Profile Docs": true
+    },
+    "6904feeb9ea0913dec62d5e7": {
+      "has_files": false
+    },
+    "6904feeb9ea0913dec62d5e8": {
+      "has_files": false
+    },
+    "6904feeb9ea0913dec62d5e9": {
+      "has_files": false
+    },
+    "6904feeb9ea0913dec62d5ea": {
+      "has_files": false
+    }
+  },
+  "run_history": [
+    {
+      "timestamp": "2026-08-03 11:54:14",
+      "module": "File Uploader",
+      "total_items": 2,
+      "success_count": 1,
+      "failed_count": 1,
+      "total_files": 3,
+      "duration_sec": 87.8,
+      "avg_speed_sec_per_item": 43.9,
+      "success_rate_pct": 50.0
+    },
+    {
+      "timestamp": "2026-08-03 11:58:40",
+      "module": "File Uploader",
+      "total_items": 2,
+      "success_count": 1,
+      "failed_count": 1,
+      "total_files": 0,
+      "duration_sec": 169.2,
+      "avg_speed_sec_per_item": 84.59,
+      "success_rate_pct": 50.0
+    },
+    {
+      "timestamp": "2026-08-03 12:01:03",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 0,
+      "failed_count": 3,
+      "total_files": 0,
+      "duration_sec": 72.1,
+      "avg_speed_sec_per_item": 24.02,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-03 13:18:04",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 1,
+      "failed_count": 2,
+      "total_files": 3,
+      "duration_sec": 121.8,
+      "avg_speed_sec_per_item": 40.59,
+      "success_rate_pct": 33.3
+    },
+    {
+      "timestamp": "2026-08-03 13:22:40",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 0,
+      "failed_count": 3,
+      "total_files": 0,
+      "duration_sec": 93.8,
+      "avg_speed_sec_per_item": 31.27,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-03 13:42:22",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 3,
+      "failed_count": 0,
+      "total_files": 9,
+      "duration_sec": 337.5,
+      "avg_speed_sec_per_item": 112.51,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-03 14:28:56",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 0,
+      "failed_count": 3,
+      "total_files": 0,
+      "duration_sec": 116.0,
+      "avg_speed_sec_per_item": 38.67,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-03 14:32:35",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 3,
+      "failed_count": 0,
+      "total_files": 9,
+      "duration_sec": 184.9,
+      "avg_speed_sec_per_item": 61.63,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-03 15:01:51",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 0,
+      "failed_count": 3,
+      "total_files": 0,
+      "duration_sec": 79.3,
+      "avg_speed_sec_per_item": 26.45,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-03 15:04:44",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 0,
+      "failed_count": 3,
+      "total_files": 0,
+      "duration_sec": 96.9,
+      "avg_speed_sec_per_item": 32.29,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-03 15:28:07",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 0,
+      "failed_count": 3,
+      "total_files": 0,
+      "duration_sec": 106.2,
+      "avg_speed_sec_per_item": 35.41,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-03 16:36:16",
+      "module": "File Uploader",
+      "total_items": 3,
+      "success_count": 3,
+      "failed_count": 0,
+      "total_files": 9,
+      "duration_sec": 155.0,
+      "avg_speed_sec_per_item": 51.68,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-04 13:04:57",
+      "module": "File Exporter",
+      "total_items": 461,
+      "success_count": 0,
+      "failed_count": 461,
+      "total_files": 0,
+      "duration_sec": 28.5,
+      "avg_speed_sec_per_item": 0.06,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 13:19:44",
+      "module": "File Exporter",
+      "total_items": 461,
+      "success_count": 0,
+      "failed_count": 461,
+      "total_files": 0,
+      "duration_sec": 102.0,
+      "avg_speed_sec_per_item": 0.22,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 13:20:36",
+      "module": "File Exporter",
+      "total_items": 461,
+      "success_count": 0,
+      "failed_count": 461,
+      "total_files": 0,
+      "duration_sec": 20.7,
+      "avg_speed_sec_per_item": 0.04,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 13:28:53",
+      "module": "File Exporter",
+      "total_items": 461,
+      "success_count": 0,
+      "failed_count": 461,
+      "total_files": 0,
+      "duration_sec": 50.7,
+      "avg_speed_sec_per_item": 0.11,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 14:07:27",
+      "module": "File Exporter",
+      "total_items": 461,
+      "success_count": 0,
+      "failed_count": 461,
+      "total_files": 0,
+      "duration_sec": 47.7,
+      "avg_speed_sec_per_item": 0.1,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 14:14:08",
+      "module": "File Exporter",
+      "total_items": 461,
+      "success_count": 2,
+      "failed_count": 459,
+      "total_files": 5,
+      "duration_sec": 141.8,
+      "avg_speed_sec_per_item": 0.31,
+      "success_rate_pct": 0.4
+    },
+    {
+      "timestamp": "2026-08-04 14:18:06",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 0,
+      "failed_count": 10,
+      "total_files": 0,
+      "duration_sec": 57.6,
+      "avg_speed_sec_per_item": 5.76,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 14:24:34",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 0,
+      "failed_count": 10,
+      "total_files": 0,
+      "duration_sec": 67.8,
+      "avg_speed_sec_per_item": 6.78,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-04 14:30:03",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 5,
+      "failed_count": 5,
+      "total_files": 12,
+      "duration_sec": 232.7,
+      "avg_speed_sec_per_item": 23.27,
+      "success_rate_pct": 50.0
+    },
+    {
+      "timestamp": "2026-08-04 14:44:22",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 3,
+      "failed_count": 7,
+      "total_files": 7,
+      "duration_sec": 158.2,
+      "avg_speed_sec_per_item": 15.82,
+      "success_rate_pct": 30.0
+    },
+    {
+      "timestamp": "2026-08-04 14:49:19",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 2,
+      "failed_count": 8,
+      "total_files": 5,
+      "duration_sec": 118.1,
+      "avg_speed_sec_per_item": 11.81,
+      "success_rate_pct": 20.0
+    },
+    {
+      "timestamp": "2026-08-04 14:59:06",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 5,
+      "failed_count": 5,
+      "total_files": 12,
+      "duration_sec": 334.8,
+      "avg_speed_sec_per_item": 33.48,
+      "success_rate_pct": 50.0
+    },
+    {
+      "timestamp": "2026-08-04 15:05:08",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 2,
+      "failed_count": 8,
+      "total_files": 3,
+      "duration_sec": 130.8,
+      "avg_speed_sec_per_item": 13.08,
+      "success_rate_pct": 20.0
+    },
+    {
+      "timestamp": "2026-08-04 15:30:28",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 2,
+      "failed_count": 8,
+      "total_files": 5,
+      "duration_sec": 167.8,
+      "avg_speed_sec_per_item": 16.78,
+      "success_rate_pct": 20.0
+    },
+    {
+      "timestamp": "2026-08-04 15:57:58",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 9,
+      "failed_count": 1,
+      "total_files": 22,
+      "duration_sec": 804.3,
+      "avg_speed_sec_per_item": 80.43,
+      "success_rate_pct": 90.0
+    },
+    {
+      "timestamp": "2026-08-04 17:12:13",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 3,
+      "failed_count": 7,
+      "total_files": 6,
+      "duration_sec": 200.5,
+      "avg_speed_sec_per_item": 20.05,
+      "success_rate_pct": 30.0
+    },
+    {
+      "timestamp": "2026-08-04 17:29:28",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 10,
+      "failed_count": 0,
+      "total_files": 43,
+      "duration_sec": 658.3,
+      "avg_speed_sec_per_item": 65.83,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-04 17:31:50",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 1,
+      "failed_count": 9,
+      "total_files": 1,
+      "duration_sec": 48.1,
+      "avg_speed_sec_per_item": 4.81,
+      "success_rate_pct": 10.0
+    },
+    {
+      "timestamp": "2026-08-04 17:36:30",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 4,
+      "failed_count": 6,
+      "total_files": 16,
+      "duration_sec": 225.7,
+      "avg_speed_sec_per_item": 22.57,
+      "success_rate_pct": 40.0
+    },
+    {
+      "timestamp": "2026-08-04 17:58:24",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 5,
+      "failed_count": 5,
+      "total_files": 12,
+      "duration_sec": 264.0,
+      "avg_speed_sec_per_item": 26.4,
+      "success_rate_pct": 50.0
+    },
+    {
+      "timestamp": "2026-08-06 14:44:40",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 9,
+      "failed_count": 1,
+      "total_files": 37,
+      "duration_sec": 636.5,
+      "avg_speed_sec_per_item": 63.65,
+      "success_rate_pct": 90.0
+    },
+    {
+      "timestamp": "2026-08-06 14:55:48",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 6,
+      "failed_count": 4,
+      "total_files": 21,
+      "duration_sec": 343.1,
+      "avg_speed_sec_per_item": 34.31,
+      "success_rate_pct": 60.0
+    },
+    {
+      "timestamp": "2026-08-06 15:08:34",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 10,
+      "failed_count": 0,
+      "total_files": 43,
+      "duration_sec": 606.7,
+      "avg_speed_sec_per_item": 60.67,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-06 15:25:29",
+      "module": "File Exporter",
+      "total_items": 10,
+      "success_count": 10,
+      "failed_count": 0,
+      "total_files": 42,
+      "duration_sec": 622.3,
+      "avg_speed_sec_per_item": 62.23,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-06 15:31:40",
+      "module": "File Exporter",
+      "total_items": 11,
+      "success_count": 1,
+      "failed_count": 10,
+      "total_files": 6,
+      "duration_sec": 127.9,
+      "avg_speed_sec_per_item": 11.63,
+      "success_rate_pct": 9.1
+    },
+    {
+      "timestamp": "2026-08-06 15:35:32",
+      "module": "File Exporter",
+      "total_items": 11,
+      "success_count": 1,
+      "failed_count": 10,
+      "total_files": 1,
+      "duration_sec": 49.4,
+      "avg_speed_sec_per_item": 4.49,
+      "success_rate_pct": 9.1
+    },
+    {
+      "timestamp": "2026-08-06 16:03:47",
+      "module": "File Exporter",
+      "total_items": 11,
+      "success_count": 1,
+      "failed_count": 10,
+      "total_files": 2,
+      "duration_sec": 89.4,
+      "avg_speed_sec_per_item": 8.13,
+      "success_rate_pct": 9.1
+    },
+    {
+      "timestamp": "2026-08-06 16:42:21",
+      "module": "File Exporter",
+      "total_items": 6,
+      "success_count": 1,
+      "failed_count": 5,
+      "total_files": 7,
+      "duration_sec": 171.6,
+      "avg_speed_sec_per_item": 28.6,
+      "success_rate_pct": 16.7
+    },
+    {
+      "timestamp": "2026-08-06 17:05:35",
+      "module": "File Exporter",
+      "total_items": 6,
+      "success_count": 1,
+      "failed_count": 5,
+      "total_files": 6,
+      "duration_sec": 131.3,
+      "avg_speed_sec_per_item": 21.88,
+      "success_rate_pct": 16.7
+    },
+    {
+      "timestamp": "2026-08-06 17:10:25",
+      "module": "File Exporter",
+      "total_items": 6,
+      "success_count": 0,
+      "failed_count": 6,
+      "total_files": 0,
+      "duration_sec": 40.7,
+      "avg_speed_sec_per_item": 6.79,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-06 17:16:06",
+      "module": "File Exporter",
+      "total_items": 6,
+      "success_count": 4,
+      "failed_count": 2,
+      "total_files": 21,
+      "duration_sec": 281.5,
+      "avg_speed_sec_per_item": 46.92,
+      "success_rate_pct": 66.7
+    },
+    {
+      "timestamp": "2026-08-06 17:24:13",
+      "module": "File Exporter",
+      "total_items": 6,
+      "success_count": 2,
+      "failed_count": 4,
+      "total_files": 24,
+      "duration_sec": 398.5,
+      "avg_speed_sec_per_item": 66.41,
+      "success_rate_pct": 33.3
+    },
+    {
+      "timestamp": "2026-08-06 17:38:27",
+      "module": "File Exporter",
+      "total_items": 1,
+      "success_count": 0,
+      "failed_count": 1,
+      "total_files": 0,
+      "duration_sec": 129.2,
+      "avg_speed_sec_per_item": 129.18,
+      "success_rate_pct": 0.0
+    },
+    {
+      "timestamp": "2026-08-06 17:51:47",
+      "module": "File Exporter",
+      "total_items": 1,
+      "success_count": 1,
+      "failed_count": 0,
+      "total_files": 14,
+      "duration_sec": 172.4,
+      "avg_speed_sec_per_item": 172.37,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-06 19:13:37",
+      "module": "File Exporter",
+      "total_items": 1,
+      "success_count": 1,
+      "failed_count": 0,
+      "total_files": 11,
+      "duration_sec": 175.9,
+      "avg_speed_sec_per_item": 175.9,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-07 12:32:31",
+      "module": "File Exporter",
+      "total_items": 1,
+      "success_count": 1,
+      "failed_count": 0,
+      "total_files": 15,
+      "duration_sec": 252.0,
+      "avg_speed_sec_per_item": 251.99,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-07 12:38:45",
+      "module": "File Exporter",
+      "total_items": 1,
+      "success_count": 1,
+      "failed_count": 0,
+      "total_files": 11,
+      "duration_sec": 177.2,
+      "avg_speed_sec_per_item": 177.15,
+      "success_rate_pct": 100.0
+    },
+    {
+      "timestamp": "2026-08-07 13:13:00",
+      "module": "File Exporter",
+      "total_items": 1,
+      "success_count": 1,
+      "failed_count": 0,
+      "total_files": 18,
+      "duration_sec": 207.1,
+      "avg_speed_sec_per_item": 207.08,
+      "success_rate_pct": 100.0
+    }
+  ],
+  "devtools_requirements": {
+    "kwi.orbundsis.com": {
+      "off_failures": 2,
+      "off_successes": 1,
+      "on_failures": 1,
+      "on_successes": 0,
+      "confirmed_required": false,
+      "last_updated": "2026-08-03 16:36:16"
+    },
+    "my-path.online": {
+      "off_failures": 3,
+      "off_successes": 0,
+      "on_failures": 5,
+      "on_successes": 29,
+      "confirmed_required": true,
+      "last_updated": "2026-08-07 13:13:00"
+    }
+  }
+}

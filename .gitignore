@@ -1,23 +1,57 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*.class
-
-# Distribution / packaging
-build/
-dist/
-*.exe
-*.pkg
-
-# PyInstaller
-*.manifest
-
-# Sessions & Logs
-sessions/*
-!sessions/.gitkeep
+# Data files
+*.xlsx
+*.csv
 *.log
 
-# Windows / OS junk
+# PDFs (source data)
+*.pdf
+*.PDF
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+unified_dashboard/build/
+unified_dashboard/dist/*.exe
+unified_dashboard/dist/*.pkg
+unified_dashboard/dist/
+*.spec
+
+# Scratch/temp
+export test/
+upload test/
+pd to data/
+scratch_*.py
+out of project/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Session & credentials (sensitive)
+sessions/
+unified_dashboard/sessions/
+settings.json
+unified_dashboard/settings.json
+
+# Large generated / runtime state
+learning_data*.json
+pdf_extractor_state.json
+unified_dashboard/learning_data*.json
+unified_dashboard/pdf_extractor_state.json
+
+
+# Windows
 desktop.ini
 Thumbs.db
-.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# pytest
+.pytest_cache/

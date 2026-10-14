@@ -11,11 +11,19 @@ datas = [
     ('pdf_extractor_configs', 'pdf_extractor_configs'),
     ('core', 'core'),
     ('modules', 'modules'),
-    ('ui', 'ui'),
+    ('ui_qt', 'ui_qt'),
 ]
 
-# Collect customtkinter assets (fonts, themes, images)
-datas += collect_data_files('customtkinter')
+# Collect PySide6 assets and submodules
+try:
+    datas += collect_data_files('PySide6')
+except Exception:
+    pass
+
+try:
+    pyside6_submodules = collect_submodules('PySide6')
+except Exception:
+    pyside6_submodules = []
 
 # Collect pdfplumber data files
 try:
@@ -23,19 +31,13 @@ try:
 except Exception:
     pass
 
-# Pandas ships a large number of compiled submodules that PyInstaller's
-# static import scan can miss; collect them explicitly so DataFrame/Excel
-# features don't fail at runtime with a hidden ImportError.
+# Pandas submodules
 try:
     pandas_submodules = collect_submodules('pandas')
 except Exception:
     pandas_submodules = []
 
-# Selenium's real module tree is far bigger than what static analysis of
-# our code reaches (e.g. selenium.webdriver.chrome.webdriver is imported
-# dynamically inside selenium itself). Missing even one submodule breaks
-# Chrome launch with an ImportError, which silently falls through to the
-# webdriver-manager fallback (which needs internet) -- so collect all of it.
+# Selenium submodules
 try:
     selenium_submodules = collect_submodules('selenium')
 except Exception:
@@ -46,11 +48,25 @@ try:
 except Exception:
     webdriver_manager_submodules = []
 
+<<<<<<< Updated upstream:build.spec
 # Selenium Manager ships a small platform-specific binary
 # (selenium/webdriver/common/windows/selenium-manager.exe) that resolves a
 # matching chromedriver WITHOUT needing internet. If this isn't bundled as
 # a data file, attempt 1 in core/chrome_driver.py can't run at all and the
 # app falls back to the online-only webdriver-manager path.
+=======
+try:
+    sklearn_submodules = collect_submodules('sklearn')
+except Exception:
+    sklearn_submodules = []
+
+try:
+    datas += collect_data_files('sklearn')
+except Exception:
+    pass
+
+# Selenium Manager binary
+>>>>>>> Stashed changes:unified_dashboard/build.spec
 try:
     datas += collect_data_files('selenium')
 except Exception:
@@ -72,20 +88,33 @@ hidden_imports = [
     'modules.file_uploader',
     'modules.grade_submission',
     'modules.pdf_extractor',
-    'ui',
-    'ui.base_tool_frame',
-    'ui.dashboard',
-    'ui.documentation_ui',
-    'ui.file_exporter_ui',
-    'ui.file_uploader_ui',
-    'ui.grade_ui',
-    'ui.learning_ui',
-    'ui.pdf_extractor_ui',
-    'ui.settings_ui',
-    'ui.theme',
-    'ui.time_series_graph',
-    # Selenium (collect_submodules below adds the full tree; these are
-    # just belt-and-suspenders for the most commonly used entry points)
+    'modules.pdf_spatial_ml',
+    'modules.pdf_rule_tuner',
+    # Qt UI (PySide6)
+    'ui_qt',
+    'ui_qt.theme',
+    'ui_qt.main_window',
+    'ui_qt.components',
+    'ui_qt.components.badge',
+    'ui_qt.components.base_tool_widget',
+    'ui_qt.components.inter_task_dialog',
+    'ui_qt.components.time_series_graph',
+    'ui_qt.views',
+    'ui_qt.views.documentation_view',
+    'ui_qt.views.file_exporter_view',
+    'ui_qt.views.file_uploader_view',
+    'ui_qt.views.grade_view',
+    'ui_qt.views.home_view',
+    'ui_qt.views.learning_view',
+    'ui_qt.views.pdf_extractor_view',
+    'ui_qt.views.pdf_review_view',
+    'ui_qt.views.settings_view',
+    # PySide6 GUI
+    'PySide6',
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    # Selenium
     'selenium',
     'selenium.webdriver',
     'selenium.webdriver.chrome',
@@ -107,17 +136,8 @@ hidden_imports = [
     'pdfminer',
     'pdfminer.high_level',
     'pdfminer.layout',
-    # GUI
-    'customtkinter',
     'PIL',
     'PIL.Image',
-    'PIL.ImageTk',
-    'PIL._tkinter_finder',
-    'tkinter',
-    'tkinter.ttk',
-    'tkinter.filedialog',
-    'tkinter.messagebox',
-    'tkinter.scrolledtext',
     # Stdlib extras that PyInstaller may miss
     'csv',
     'threading',
@@ -134,7 +154,13 @@ hidden_imports = [
     'winreg',
     'socket',
     'glob',
+<<<<<<< Updated upstream:build.spec
 ] + pandas_submodules + selenium_submodules + webdriver_manager_submodules
+=======
+    'sklearn',
+    'sklearn.cluster',
+] + pandas_submodules + selenium_submodules + webdriver_manager_submodules + sklearn_submodules + pyside6_submodules
+>>>>>>> Stashed changes:unified_dashboard/build.spec
 
 a = Analysis(
     ['main.py'],
@@ -145,7 +171,11 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=['runtime_hook.py'],
+<<<<<<< Updated upstream:build.spec
     excludes=['matplotlib', 'scipy', 'cv2'],
+=======
+    excludes=['matplotlib', 'cv2', 'tkinter', 'customtkinter'],
+>>>>>>> Stashed changes:unified_dashboard/build.spec
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -176,11 +206,3 @@ exe = EXE(
     entitlements_file=None,
     icon=None,              # Replace with 'icon.ico' if you have one
 )
-
-# Single portable file: no COLLECT step. Everything (interpreter, libs,
-# data files) is embedded directly into dist\UnifiedDashboard.exe above, so
-# distributing the app is just handing someone that one .exe -- no installer,
-# no Python, no separate folder of DLLs required on the target machine.
-# All user-writable data (settings.json, learning_data.json, sessions/,
-# pdf_extractor_configs/) is written next to wherever that .exe is placed
-# (see core/paths.py), so it stays fully portable (e.g. on a USB stick).

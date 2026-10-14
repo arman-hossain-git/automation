@@ -2,7 +2,7 @@
 
 A high-performance, modular desktop automation platform designed to streamline student information system workflows (PCR Educator, Orbund, MyPath) and high-volume document processing.
 
-Built with Python, Tkinter / CustomTkinter, Selenium, and `pdfplumber`, the suite integrates web scraping, batch file uploads, grade posting, PDF data extraction, and an adaptive machine-learning engine into a modern dark-themed GUI.
+Built with Python, PySide6 (Qt for Python), Selenium, and `pdfplumber`, the suite integrates web scraping, batch file uploads, grade posting, PDF data extraction, and an adaptive machine-learning engine into a modern dark-themed Qt interface.
 
 ---
 
@@ -56,7 +56,7 @@ The **Unified System Automation Suite** replaces these repetitive manual tasks w
 
 ```mermaid
 graph TD
-    A[main.py: Application Entrypoint] --> B[UnifiedDashboardApp GUI]
+    A[main.py: Application Entrypoint] --> B[MainWindow PySide6 GUI]
     B --> C[File Exporter Module]
     B --> D[File Uploader Module]
     B --> E[Grade Submission Module]
@@ -80,7 +80,8 @@ graph TD
 
 ```
 unified_dashboard/
-├── main.py                     # GUI launcher and global crash handler
+├── main.py                     # GUI launcher and global crash handler (PySide6)
+├── main_qt.py                  # Direct launcher alias
 ├── requirements.txt            # Python dependencies
 ├── settings.json               # Application runtime settings
 ├── learning_data.json          # Persisted machine learning & XPath cache
@@ -111,18 +112,24 @@ unified_dashboard/
 │   ├── student_schedule.json
 │   └── student_transcript.json
 │
-└── ui/                         # Presentation layer (Tkinter / CustomTkinter)
-    ├── base_tool_frame.py      # Base template for automation views (KPIs, logs)
-    ├── dashboard.py            # Primary shell with sidebar & navigation
-    ├── documentation_ui.py     # Built-in searchable user documentation
-    ├── file_exporter_ui.py     # Exporter module interface
-    ├── file_uploader_ui.py     # Uploader module interface
-    ├── grade_ui.py             # Grade submission interface
-    ├── learning_ui.py          # Adaptive learning metrics dashboard
-    ├── pdf_extractor_ui.py     # PDF extractor & visual config editor
-    ├── settings_ui.py          # Browser, timeout, and system settings
-    ├── theme.py                # Modern dark palette and typography
-    └── time_series_graph.py    # Tkinter Canvas chart for latency & performance
+└── ui_qt/                      # Presentation layer (Modern PySide6 Qt Interface)
+    ├── components/             # Reusable UI widgets (BaseToolWidget, KPIs, Badges, Charts)
+    │   ├── badge.py            # Status badges & KPI metric cards
+    │   ├── base_tool_widget.py # Unified tool runner layout & multi-task queue table
+    │   ├── inter_task_dialog.py# Inter-task confirmation dialogs
+    │   └── time_series_graph.py# Telemetry graph widget
+    ├── theme.py                # Modern dark palette, styling tokens & QSS sheets
+    ├── main_window.py          # Primary shell with collapsible sidebar & navigation
+    └── views/                  # Dedicated automation tool views
+        ├── documentation_view.py
+        ├── file_exporter_view.py
+        ├── file_uploader_view.py
+        ├── grade_view.py
+        ├── home_view.py
+        ├── learning_view.py
+        ├── pdf_extractor_view.py
+        ├── pdf_review_view.py
+        └── settings_view.py
 ```
 
 ---

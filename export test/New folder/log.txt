@@ -1,0 +1,202 @@
+[16:39:30] [INFO   ] Started · 6 records · template: {studentId}/{segment}
+[16:39:30] [INFO   ] Launching Chrome WebDriver (attempt 1: Selenium Manager).
+[16:39:39] [INFO   ] Chrome launched successfully via Selenium Manager.
+[16:39:39] [INFO   ] Navigating to login URL: https://my-path.online/
+[16:39:46] [INFO   ] Login successful.
+[16:39:46] [DEBUG  ] [DIAG:baseline_after_login] student=<none> url=https://my-path.online/ title='My Path' password_fields=0 (visible=0) username_fields=0 (visible=0) cookies=[_ga_NRZY8EX1E3=<val>, _lr_hb_-s8gwuu%2Fpathway-sis=<val>, _ga=<val>, _lr_tabs_-s8gwuu%2Fpathway-sis=<val>] storage_keys={'local': ['_lr_id_'], 'session': ['__lr_navigation_history_v1']} body_preview=''
+[16:39:46] [INFO   ] --- Record 6904feeb9ea0913dec62d5e2 (1/6) ---
+[16:39:50] [INFO   ] [MODE] route='finances' learned='auto' (auto-detect always active)
+[16:40:01] [INFO   ] [AUTO-DETECT] Scanning page structure for static files.
+[16:40:04] [WARNING] No files found on static page for 6904feeb9ea0913dec62d5e2.
+[16:40:05] [DEBUG  ] [DIAG:generic_scan] student=6904feeb9ea0913dec62d5e2 route='finances' url=https://my-path.online/kwi/students/6904feeb9ea0913dec62d5e2/general visible_buttons_with_text=1 sample=["'Show More':no_keyword_match"]
+[16:40:05] [INFO   ]   [TAB] Checking 'general' tab for 6904feeb9ea0913dec62d5e2...
+[16:40:09] [INFO   ] [MODE] route='general' learned='auto' (auto-detect always active)
+[16:40:19] [INFO   ] [AUTO-DETECT] Scanning page structure for static files.
+[16:40:22] [WARNING] No files found on static page for 6904feeb9ea0913dec62d5e2.
+[16:40:22] [DEBUG  ] [DIAG:generic_scan] student=6904feeb9ea0913dec62d5e2 route='general' url=https://my-path.online/kwi/students/6904feeb9ea0913dec62d5e2/academics visible_buttons_with_text=2 sample=["'Certified Pipe Welding (CPW)':no_keyword_match", "'Apply to a new program':no_keyword_match"]
+[16:40:22] [INFO   ]   [TAB] Checking 'academics' tab for 6904feeb9ea0913dec62d5e2...
+[16:40:25] [INFO   ] [MODE] route='academics' learned='generate_documents' (auto-detect always active)
+[16:40:27] [INFO   ] Found 1 program(s) for 6904feeb9ea0913dec62d5e2: ['Certified Pipe Welding (CPW)']
+[16:40:52] [INFO   ] [GENERIC] Found 3 standalone generate/download button(s) on 'academics' for 6904feeb9ea0913dec62d5e2.
+[16:40:52] [INFO   ]     [GENERIC] Capturing 'Generate Transcript' for 6904feeb9ea0913dec62d5e2 (academics)...
+[16:40:57] [DEBUG  ] Modal iframe/embed URL for 'Generate Transcript': blob:https://my-path.online/9f7044ef-48c4-4f2a-91e3-a9e852dc0176
+[16:40:57] [INFO   ]     [GENERIC] Capturing 'Generate Progress Report' for 6904feeb9ea0913dec62d5e2 (academics)...
+[16:41:03] [DEBUG  ] Modal iframe/embed URL for 'Generate Progress Report': blob:https://my-path.online/6605c874-3c06-4d61-87b9-9062e7b899ee
+[16:41:04] [INFO   ]     [GENERIC] Capturing 'Generate Attendance Report' for 6904feeb9ea0913dec62d5e2 (academics)...
+[16:41:07] [DEBUG  ] Modal iframe/embed URL for 'Generate Attendance Report': blob:https://my-path.online/adf85b8a-4634-48a5-8d42-b0587eaac3db
+[16:41:07] [INFO   ] [GENERIC] 'academics': 3 standalone generate-button file(s) captured.
+[16:41:07] [INFO   ]   [TAB] 'academics': 6 file(s) captured.
+[16:41:07] [INFO   ]   [TAB] Checking 'graduation' tab for 6904feeb9ea0913dec62d5e2...
+[16:41:11] [INFO   ] [MODE] route='graduation' learned='generate_documents' (auto-detect always active)
+[16:41:12] [INFO   ] Found 1 program(s) for 6904feeb9ea0913dec62d5e2: ['Certified Pipe Welding (CPW)']
+[16:41:20] [INFO   ] [GENERIC] Found 1 standalone generate/download button(s) on 'graduation' for 6904feeb9ea0913dec62d5e2.
+[16:41:20] [INFO   ]     [GENERIC] Capturing 'Generate Transcript' for 6904feeb9ea0913dec62d5e2 (graduation)...
+[16:41:26] [DEBUG  ] No native download found on disk for 'Generate Transcript' (only Chrome error page(s) landed; removed them).
+[16:41:26] [ERROR  ] Could not obtain download URL for 'Generate Transcript' — modal/tab strategy exhausted.
+[16:41:26] [INFO   ]   [TAB] 'graduation': 1 file(s) captured.
+[16:41:27] [INFO   ]   [TAB] Checking 'career-services' tab for 6904feeb9ea0913dec62d5e2...
+[16:41:38] [INFO   ] [MODE] route='career-services' learned='auto' (auto-detect always active)
+[16:41:48] [INFO   ] [AUTO-DETECT] Scanning page structure for static files.
+[16:41:51] [WARNING] No files found on static page for 6904feeb9ea0913dec62d5e2.
+[16:41:52] [DEBUG  ] [DIAG:generic_scan] student=6904feeb9ea0913dec62d5e2 route='career-services' url=https://my-path.online/kwi/students/6904feeb9ea0913dec62d5e2/general visible_buttons_with_text=1 sample=["'Show More':no_keyword_match"]
+[16:41:52] [INFO   ]   [TAB] Checking 'documents' tab for 6904feeb9ea0913dec62d5e2...
+[16:41:55] [INFO   ] [MODE] route='documents' learned='mypath_documents' (auto-detect always active)
+[16:41:56] [INFO   ] Found 4 section(s), 5 file(s) for 6904feeb9ea0913dec62d5e2.
+[16:41:56] [INFO   ]   Section 'Academics': 1 file(s).
+[16:41:56] [INFO   ]     [1/5] 'Christopher Prewitt-Attendance-Report-2025-12-12_15-16-25' [Attendance Report]
+[16:41:57] [DEBUG  ] Modal iframe/embed URL for 'Christopher Prewitt-Attendance-Report-2025-12-12_15-16-25': https://storage.googleapis.com/pathway-sis.appspot.com/kwi/6904feeb9ea0913dec62d5e2/a11ec7ef-8bf1-4063-afd2-0649ad4a3405?GoogleAccessId=firebase-adminsdk-1w14c%40pathway-sis.iam.gserviceaccount.com&Expires=1786016517&Signature=L52ZTM35VutPcZwSjSrm2Dn%2BorDfcZ60XrphvBTQY2E2Pk5HYaAXpp2ZZT2qwUgthFF3gxDdZbbw0i8mzKboHGD4W78gt3D1jKplFR1sK4f4yFeE48LO%2FlnMkToGmkbisMDMNnlvt2YTRxXSNs5WOloEE3P2ugFG4DEmCoMkN01GPoDbrvuWCX8JDYXvjutKNFTF07VBjF0MyGBmwBVU8J6TNDmVexoa6KNyvWaFm1oOhN33Pea67hBthmwJqJybOuGBqcqFQZRMOB7OK%2BWnkgvFaDn4BJPs5tLGy%2BSH5bmyTBVng0%2FuX7oL3kb1ldxTDrvTu37iWqp1%2Bd9XzudmHA%3D%3D&response-content-disposition=inline
+[16:42:00] [INFO   ] Recovered native download for 'Christopher Prewitt-Attendance-Report-2025-12-12_15-16-25' -> F:\system automation\export test\6904feeb9ea0913dec62d5e2\Academics\Christopher Prewitt-Attendance-Report-2025-12-12_15-16-25.pdf
+[16:42:00] [INFO   ]   Section 'Finances': 1 file(s).
+[16:42:00] [INFO   ]     [2/5] 'irs1098T-2025' [IRS 1098-T]
+[16:42:03] [DEBUG  ] Modal iframe/embed URL for 'irs1098T-2025': https://storage.googleapis.com/pathway-sis.appspot.com/kwi/6904feeb9ea0913dec62d5e2/b98abeb0-aa9d-4fa8-b7a8-47ef2d1c2861?GoogleAccessId=firebase-adminsdk-1w14c%40pathway-sis.iam.gserviceaccount.com&Expires=1786016523&Signature=CjOcm2MOgWhNuot%2FEPhWsF9aQHR0wyLz7rX74sJbpIleB7x0KcbNZaEJlqtiyycjO9dbBfn13NDlXHYXk%2FjHpgJrj1yCQM7XpZpjsn7GopFC8HCyfXjAOfMD4v2apgotoR1WfoAgHfLzX%2F1a6MqzwdmWDwzPVh2PyXziiz6Gt8UJM8uVz8NuGPM9zcsFs1xhBSFUef%2BOrK%2FzqraqDsfXiXWDcDf%2BE1HuRVtjyEYX1SCQEgLX%2B7dG3M%2B80KBo2WgYpdefNJlGKBegZ%2BV9MfoKwB8YFUpQ8Gjdo8dP%2Fwyv%2BUMPOIFlm0mTJfEKHFENpK7%2BMaFOBZuEtCBI%2B1jOACCqzw%3D%3D&response-content-disposition=inline
+[16:42:06] [INFO   ] Recovered native download for 'irs1098T-2025' -> F:\system automation\export test\6904feeb9ea0913dec62d5e2\Finances\irs1098T-2025.pdf
+[16:42:06] [INFO   ]   Section 'Graduation': 2 file(s).
+[16:42:06] [INFO   ]     [3/5] 'C Prewitt.pdf' [School Use Only]
+[16:42:09] [DEBUG  ] Modal iframe/embed URL for 'C Prewitt.pdf': https://storage.googleapis.com/pathway-sis.appspot.com/kwi/6904feeb9ea0913dec62d5e2/c60467e4-a095-42ee-8ea5-e3734ab282c0?GoogleAccessId=firebase-adminsdk-1w14c%40pathway-sis.iam.gserviceaccount.com&Expires=1786016528&Signature=TJ6YwaG5KAnVH%2F0suCQL37rKAXDvXS22wyNHd1UV34kMCc3iJ1167vkMpNIPZBcKEI3lobqoPN3XQMYT5NspJtT1wc7shyzj6vSjNUBSCxe2JkQ%2BOGy8pT5DXQ4AjIqquB%2BZ1nOWDIhaimWcPww2MWJbNBUBa4zn3DtnYKqWCDOlI%2FR9Lm2CCai4HOLVDdTRtnrTEampviHgwcnWdig0MC84Zdx%2F3uRAQ2K%2FYp7f1C4Q%2FwAE4F1JzGeVQpjTj5gyjhuYvvUFBuqksdim1fd21pQ0NEfR4x%2Bx6ZtYgafO2yFJPzhMmx7griTtXJYB7e3xJIpjGC4yQxFYzLTDSopvKA%3D%3D&response-content-disposition=inline
+[16:42:12] [INFO   ] Recovered native download for 'C Prewitt.pdf' -> F:\system automation\export test\6904feeb9ea0913dec62d5e2\Graduation\C Prewitt.pdf
+[16:42:13] [INFO   ]     [4/5] 'Official Transcript' [Official Transcript]
+[16:42:16] [DEBUG  ] Modal iframe/embed URL for 'Official Transcript': https://storage.googleapis.com/pathway-sis.appspot.com/kwi/6904feeb9ea0913dec62d5e2/9d1423c2-f3bd-4199-b9b8-5ee81d7449f6?GoogleAccessId=firebase-adminsdk-1w14c%40pathway-sis.iam.gserviceaccount.com&Expires=1786016535&Signature=LRx8fhJbyXErH3iNxx0qdVkUZWSR%2B912TMIIGhMWoi82jbxJAlbkfIF3EEWBXBlJg%2FsM9ijzX2bLMT8Xs22r6OTAkUyfG3Xi%2B92N1wO%2B4bUgZ%2BEbzMIymt4rnz9XXgRKhJAY%2B2tCXhEqzMBmq%2BA8Z7oY7yL%2F%2B8mttqruguul2N9yM6nHiMtdBufS8AQblPK4Vn%2B%2BT%2Bzt6mklcnhcFLSXOpiWxlbxvtggvaGelzlL9orIRvhOq%2FADX3kDSohLXUpjvmyIR36ceBI94AMisxCwwkVBhXYD80AjWa3v7R6uPSFWw%2FQgeDY%2BYsJflQz6F3p%2F2Cxtaevj%2FHeS7%2Bu79E1odg%3D%3D&response-content-disposition=inline
+[16:42:18] [INFO   ] Recovered native download for 'Official Transcript' -> F:\system automation\export test\6904feeb9ea0913dec62d5e2\Graduation\Official Transcript.pdf
+[16:42:19] [INFO   ]   Section 'Receipts': 1 file(s).
+[16:42:19] [INFO   ]     [5/5] 'Prewitt Final Ledger.pdf' [School Use Only]
+[16:42:19] [WARNING] Page.setDownloadBehavior failed: Message: no such window: target window already closed
+from unknown error: web view not found
+  (Session info: chrome=151.0.7922.72)
+Stacktrace:
+	chromedriver!GetHandleVerifier [0x7ff778618905+14ce5]
+	chromedriver!GetHandleVerifier [0x7ff778618960+14d40]
+	chromedriver!(No symbol) [0x7ff778145afd]
+	chromedriver!(No symbol) [0x7ff77811c9f2]
+	chromedriver!(No symbol) [0x7ff7781d0966]
+	chromedriver!(No symbol) [0x7ff7781edd92]
+	chromedriver!(No symbol) [0x7ff77819308c]
+	chromedriver!(No symbol) [0x7ff778193fb3]
+	chromedriver!GetHandleVerifier [0x7ff778c4e5db+64a9bb]
+	chromedriver!GetHandleVerifier [0x7ff778c48ae2+644ec2]
+	chromedriver!GetHandleVerifier [0x7ff778c6e37e+66a75e]
+	chromedriver!GetHandleVerifier [0x7ff778635d3e+3211e]
+	chromedriver!GetHandleVerifier [0x7ff77863e4ec+3a8cc]
+	chromedriver!GetHandleVerifier [0x7ff778622814+1ebf4]
+	chromedriver!GetHandleVerifier [0x7ff7786229a4+1ed84]
+	chromedriver!GetHandleVerifier [0x7ff778605cd7+20b7]
+	KERNEL32!BaseThreadInitThunk [0x7ffa4b5d7374+14]
+	ntdll!RtlUserThreadStart [0x7ffa4d11cc91+21]
+
+[16:42:19] [WARNING] Browser.setDownloadBehavior failed: Message: no such window: target window already closed
+from unknown error: web view not found
+  (Session info: chrome=151.0.7922.72)
+Stacktrace:
+	chromedriver!GetHandleVerifier [0x7ff778618905+14ce5]
+	chromedriver!GetHandleVerifier [0x7ff778618960+14d40]
+	chromedriver!(No symbol) [0x7ff778145afd]
+	chromedriver!(No symbol) [0x7ff77811c9f2]
+	chromedriver!(No symbol) [0x7ff7781d0966]
+	chromedriver!(No symbol) [0x7ff7781edd92]
+	chromedriver!(No symbol) [0x7ff77819308c]
+	chromedriver!(No symbol) [0x7ff778193fb3]
+	chromedriver!GetHandleVerifier [0x7ff778c4e5db+64a9bb]
+	chromedriver!GetHandleVerifier [0x7ff778c48ae2+644ec2]
+	chromedriver!GetHandleVerifier [0x7ff778c6e37e+66a75e]
+	chromedriver!GetHandleVerifier [0x7ff778635d3e+3211e]
+	chromedriver!GetHandleVerifier [0x7ff77863e4ec+3a8cc]
+	chromedriver!GetHandleVerifier [0x7ff778622814+1ebf4]
+	chromedriver!GetHandleVerifier [0x7ff7786229a4+1ed84]
+	chromedriver!GetHandleVerifier [0x7ff778605cd7+20b7]
+	KERNEL32!BaseThreadInitThunk [0x7ffa4b5d7374+14]
+	ntdll!RtlUserThreadStart [0x7ffa4d11cc91+21]
+
+[16:42:19] [DEBUG  ] Tab 'documents' failed for 6904feeb9ea0913dec62d5e2: Message: invalid session id: session deleted as the browser has closed the connection
+from disconnected: not connected to DevTools
+  (Session info: chrome=151.0.7922.72); For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#invalidsessionidexception
+Stacktrace:
+	chromedriver!GetHandleVerifier [0x7ff778618905+14ce5]
+	chromedriver!GetHandleVerifier [0x7ff778618960+14d40]
+	chromedriver!(No symbol) [0x7ff778145afd]
+	chromedriver!(No symbol) [0x7ff77812fc6f]
+	chromedriver!(No symbol) [0x7ff778130d2f]
+	chromedriver!(No symbol) [0x7ff778146663]
+	chromedriver!(No symbol) [0x7ff77811c371]
+	chromedriver!(No symbol) [0x7ff7781dbb98]
+	chromedriver!(No symbol) [0x7ff77819308c]
+	chromedriver!(No symbol) [0x7ff778193fb3]
+	chromedriver!GetHandleVerifier [0x7ff778c4e5db+64a9bb]
+	chromedriver!GetHandleVerifier [0x7ff778c48ae2+644ec2]
+	chromedriver!GetHandleVerifier [0x7ff778c6e37e+66a75e]
+	chromedriver!GetHandleVerifier [0x7ff778635d3e+3211e]
+	chromedriver!GetHandleVerifier [0x7ff77863e4ec+3a8cc]
+	chromedriver!GetHandleVerifier [0x7ff778622814+1ebf4]
+	chromedriver!GetHandleVerifier [0x7ff7786229a4+1ed84]
+	chromedriver!GetHandleVerifier [0x7ff778605cd7+20b7]
+	KERNEL32!BaseThreadInitThunk [0x7ffa4b5d7374+14]
+	ntdll!RtlUserThreadStart [0x7ffa4d11cc91+21]
+
+[16:42:19] [INFO   ] --- Record 6904feeb9ea0913dec62d5e1 (2/6) ---
+[16:42:21] [INFO   ] [LEARNING] Run complete. 171.6s, 1/6 records, 7 files.
+[16:42:21] [ERROR  ] Fatal error: Message: invalid session id; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#invalidsessionidexception
+Stacktrace:
+	chromedriver!GetHandleVerifier [0x7ff778618905+14ce5]
+	chromedriver!GetHandleVerifier [0x7ff778618960+14d40]
+	chromedriver!(No symbol) [0x7ff7781458e6]
+	chromedriver!(No symbol) [0x7ff7781920f6]
+	chromedriver!(No symbol) [0x7ff7781c94c2]
+	chromedriver!(No symbol) [0x7ff7781c32e2]
+	chromedriver!(No symbol) [0x7ff7781c2aa2]
+	chromedriver!(No symbol) [0x7ff77810e05b]
+	chromedriver!(No symbol) [0x7ff77810e6b2]
+	chromedriver!(No symbol) [0x7ff77810ec75]
+	chromedriver!GetHandleVerifier [0x7ff778c4e5db+64a9bb]
+	chromedriver!GetHandleVerifier [0x7ff778c48ae2+644ec2]
+	chromedriver!GetHandleVerifier [0x7ff778c6e37e+66a75e]
+	chromedriver!GetHandleVerifier [0x7ff778635d3e+3211e]
+	chromedriver!GetHandleVerifier [0x7ff77863e4ec+3a8cc]
+	chromedriver!(No symbol) [0x7ff77810d5dc]
+	chromedriver!GetHandleVerifier [0x7ff778e1e578+81a958]
+	KERNEL32!BaseThreadInitThunk [0x7ffa4b5d7374+14]
+	ntdll!RtlUserThreadStart [0x7ffa4d11cc91+21]
+
+[16:42:21] [DEBUG  ] Traceback (most recent call last):
+  File "F:\system automation\unified_dashboard\ui\file_exporter_ui.py", line 262, in run_thread
+    self.exporter.run(
+    ~~~~~~~~~~~~~~~~~^
+        config=config,
+        ^^^^^^^^^^^^^^
+    ...<11 lines>...
+        log=self.log
+        ^^^^^^^^^^^^
+    )
+    ^
+  File "F:\system automation\unified_dashboard\modules\file_exporter.py", line 281, in run
+    driver.get(link)
+    ~~~~~~~~~~^^^^^^
+  File "C:\Users\Arman\AppData\Local\Programs\Python\Python314\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 512, in get
+    self.execute(Command.GET, {"url": url})
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Arman\AppData\Local\Programs\Python\Python314\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 492, in execute
+    self.error_handler.check_response(response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\Arman\AppData\Local\Programs\Python\Python314\Lib\site-packages\selenium\webdriver\remote\errorhandler.py", line 232, in check_response
+    raise exception_class(message, screen, stacktrace)
+selenium.common.exceptions.InvalidSessionIdException: Message: invalid session id; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#invalidsessionidexception
+Stacktrace:
+	chromedriver!GetHandleVerifier [0x7ff778618905+14ce5]
+	chromedriver!GetHandleVerifier [0x7ff778618960+14d40]
+	chromedriver!(No symbol) [0x7ff7781458e6]
+	chromedriver!(No symbol) [0x7ff7781920f6]
+	chromedriver!(No symbol) [0x7ff7781c94c2]
+	chromedriver!(No symbol) [0x7ff7781c32e2]
+	chromedriver!(No symbol) [0x7ff7781c2aa2]
+	chromedriver!(No symbol) [0x7ff77810e05b]
+	chromedriver!(No symbol) [0x7ff77810e6b2]
+	chromedriver!(No symbol) [0x7ff77810ec75]
+	chromedriver!GetHandleVerifier [0x7ff778c4e5db+64a9bb]
+	chromedriver!GetHandleVerifier [0x7ff778c48ae2+644ec2]
+	chromedriver!GetHandleVerifier [0x7ff778c6e37e+66a75e]
+	chromedriver!GetHandleVerifier [0x7ff778635d3e+3211e]
+	chromedriver!GetHandleVerifier [0x7ff77863e4ec+3a8cc]
+	chromedriver!(No symbol) [0x7ff77810d5dc]
+	chromedriver!GetHandleVerifier [0x7ff778e1e578+81a958]
+	KERNEL32!BaseThreadInitThunk [0x7ffa4b5d7374+14]
+	ntdll!RtlUserThreadStart [0x7ffa4d11cc91+21]
+
+
+

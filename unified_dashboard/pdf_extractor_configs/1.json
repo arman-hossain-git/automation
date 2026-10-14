@@ -1,0 +1,84 @@
+{
+  "record_separator": "Bayamon Community College Student Ledger",
+  "exclude_patterns": [
+    "Page\\s+\\d+\\s+of\\s+\\d+",
+    "Powered by TCPDF.*",
+    "https?://\\S+",
+    "^\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+,\\s*[A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u00ff\\s]+)$",
+    "stop_at": ""
+  },
+  "address_block": null,
+  "repeating_sections": [],
+  "summary_fields": [
+    {
+      "name": "pr_00961_campus",
+      "pattern": "PR\\ 00961\\ Campus:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "program_description",
+      "pattern": "Program\\ Description:[ \\t]*(.+?)(?=[ \\t]+Asistente\\ de\\ Group:|\\r?\\n|$)"
+    },
+    {
+      "name": "asistente_de_group",
+      "pattern": "Asistente\\ de\\ Group:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "first_term",
+      "pattern": "First\\ Term:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "exp_grad_date",
+      "pattern": "Exp\\ Grad\\ Date:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "ft_pt",
+      "pattern": "FT/PT:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "status",
+      "pattern": "Status:[ \\t]*(.+?)(?=[ \\t]+Graduated\\ Session:|\\r?\\n|$)"
+    },
+    {
+      "name": "graduated_session",
+      "pattern": "Graduated\\ Session:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    }
+  ],
+  "data_rows": {
+    "pattern": "^\\s*(\\d{2}/\\d{2}/\\d{4})\\s+([A-Za-z0-9\\-]+)\\s+([A-Za-z0-9\\-]+)\\s+(.+?)\\s+(.+?)\\s+([-]?\\$?[\\d,.]+)\\s*$",
+    "columns": [
+      "trans_date",
+      "ledger_code_description",
+      "receipt_check",
+      "debit",
+      "credit",
+      "balance"
+    ]
+  },
+  "output_columns": [
+    "student_name",
+    "pr_00961_campus",
+    "program_description",
+    "asistente_de_group",
+    "first_term",
+    "exp_grad_date",
+    "ft_pt",
+    "status",
+    "graduated_session",
+    "trans_date",
+    "ledger_code_description",
+    "receipt_check",
+    "debit",
+    "credit",
+    "balance"
+  ],
+  "ml_metadata": {
+    "synthesizer": "dbscan_spatial_ml",
+    "source_sample": "Acevedo Freytes Stephanie_30848.pdf",
+    "detected_fields_count": 8,
+    "table_detected": true
+  }
+}

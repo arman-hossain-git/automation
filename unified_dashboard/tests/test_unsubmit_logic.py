@@ -2,7 +2,7 @@
 tests/test_unsubmit_logic.py
 ============================
 Unit tests for Grades sub-features (Submit Grades and Un-submit Grades),
-flexible column parsing, log reconciliation, and Qt dashboard integration.
+flexible column parsing, log reconciliation, and dashboard integration.
 """
 
 import os
@@ -10,20 +10,12 @@ import tempfile
 import unittest
 import pandas as pd
 
-from PySide6.QtWidgets import QApplication
-
 from modules.grade_submission import GradeSubmitter
-from ui_qt.main_window import MainWindow
-from ui_qt.views.home_view import HomeView
-from ui_qt.views.file_uploader_view import FileUploaderView
-from ui_qt.views.grade_view import GradeView
+from ui.dashboard import TOOLS
+from ui.grade_ui import GradeUI
 
 
 class TestUnsubmitLogic(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication(["--platform", "offscreen"])
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -34,59 +26,66 @@ class TestUnsubmitLogic(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_dashboard_registration(self):
-        """Verify unified Grades module is registered in Qt MainWindow and supports submit and unsubmit."""
-        window = MainWindow()
-        try:
-            self.assertIn("grades", window._views)
-            grade_view = window._views["grades"]
-            self.assertIsInstance(grade_view, GradeView)
-            self.assertTrue(hasattr(grade_view, "rb_unsubmit"))
-            self.assertTrue(hasattr(grade_view, "rb_submit"))
-            self.assertEqual(grade_view.sub_feature, "submit")
-        finally:
-            window.close()
+        """Verify unified Grades module is registered in dashboard TOOLS with both sub-features."""
+        tool_ids = [t["id"] for t in TOOLS]
+        self.assertIn("grades", tool_ids)
+        self.assertNotIn("unsubmit_grades", tool_ids)
+
+        tool = next(t for t in TOOLS if t["id"] == "grades")
+        self.assertEqual(tool["title"], "Grades")
+        self.assertEqual(tool["class"], GradeUI)
+        self.assertIn("sub_features", tool)
+        sf_ids = [sf["id"] for sf in tool["sub_features"]]
+        self.assertIn("submit", sf_ids)
+        self.assertIn("unsubmit", sf_ids)
 
     def test_home_registration(self):
-        """Verify Home module is registered as the default initial view."""
-        window = MainWindow()
-        try:
-            self.assertEqual(window._active_tool_id, "home")
-            self.assertIsInstance(window.stack.currentWidget(), HomeView)
-        finally:
-            window.close()
+        """Verify Home module is registered as the first item in dashboard TOOLS."""
+        from ui.home_ui import HomeUI
+        self.assertEqual(TOOLS[0]["id"], "home")
+        self.assertEqual(TOOLS[0]["title"], "Home")
+        self.assertEqual(TOOLS[0]["class"], HomeUI)
 
     def test_parent_click_does_not_navigate(self):
         """Verify clicking on a parent module toggles accordion without changing dashboard content view."""
-        window = MainWindow()
+        from ui.dashboard import UnifiedDashboardApp
+        from ui.home_ui import HomeUI
+        from ui.file_uploader_ui import FileUploaderUI
+
+        app = UnifiedDashboardApp()
         try:
             # Starts on Home
-            self.assertEqual(window._active_tool_id, "home")
-            self.assertIsInstance(window.stack.currentWidget(), HomeView)
+            self.assertEqual(app.active_tool_id, "home")
+            self.assertIsInstance(app.active_frame, HomeUI)
 
-            # Clicking parent 'files' toggles accordion but must NOT change active frame
-            files_nav = window._nav_items["files"]
-            initial_expanded = files_nav._sub_expanded
-            window._on_nav_click("files", has_sub=True)
-            self.assertEqual(window._active_tool_id, "home")
-            self.assertIsInstance(window.stack.currentWidget(), HomeView)
-            self.assertNotEqual(files_nav._sub_expanded, initial_expanded)
+            # Clicking parent 'files' or calling toggle_parent_accordion must NOT change active frame
+            app.select_tool("files")
+            self.assertEqual(app.active_tool_id, "home")
+            self.assertIsInstance(app.active_frame, HomeUI)
+            self.assertTrue(app.expanded_parents.get("files", False))
+
+            # Clicking parent 'grades' must NOT change active frame
+            app.select_tool("grades")
+            self.assertEqual(app.active_tool_id, "home")
+            self.assertIsInstance(app.active_frame, HomeUI)
+            self.assertTrue(app.expanded_parents.get("grades", False))
 
             # Sub-feature click DOES change active frame
-            window._on_sub_nav_click("files", "file_uploader")
-            self.assertEqual(window._active_tool_id, "files")
-            self.assertIsInstance(window.stack.currentWidget(), FileUploaderView)
+            app.select_sub_feature("files", "file_uploader")
+            self.assertEqual(app.active_tool_id, "files")
+            self.assertIsInstance(app.active_frame, FileUploaderUI)
 
-            # Clicking parent 'files' again to collapse does NOT navigate away
-            window._on_nav_click("files", has_sub=True)
-            self.assertEqual(window._active_tool_id, "files")
-            self.assertIsInstance(window.stack.currentWidget(), FileUploaderView)
+            # Clicking parent 'grades' again while on file_uploader must NOT navigate away
+            app.select_tool("grades")
+            self.assertEqual(app.active_tool_id, "files")
+            self.assertIsInstance(app.active_frame, FileUploaderUI)
 
             # Clicking Home returns to Home
-            window.navigate_to("home")
-            self.assertEqual(window._active_tool_id, "home")
-            self.assertIsInstance(window.stack.currentWidget(), HomeView)
+            app.select_tool("home")
+            self.assertEqual(app.active_tool_id, "home")
+            self.assertIsInstance(app.active_frame, HomeUI)
         finally:
-            window.close()
+            app.destroy()
 
     def test_flexible_csv_columns_detection(self):
         """Verify column parsing correctly identifies student and link variations."""

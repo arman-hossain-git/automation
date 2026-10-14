@@ -1,0 +1,115 @@
+{
+  "record_separator": "Student Ledger",
+  "exclude_patterns": [
+    "Page\\s+\\d+\\s+of\\s+\\d+",
+    "Powered by TCPDF.*",
+    "https?://\\S+",
+    "^\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}",
+    "^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),.*Page\\s+\\d+"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00c0-\\u00ff\\ufffd\\s'.-]+,\\s*[A-Za-z\\u00c0-\\u00ff\\ufffd\\s'.-]+)$",
+    "stop_at": ""
+  },
+  "address_block": null,
+  "repeating_sections": [],
+  "summary_fields": [
+    {
+      "name": "campus",
+      "pattern": "Campus:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "campus_continuation",
+      "pattern": "Campus:[^\\n\\r]*\\r?\\n(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*([^\\n\\r]+)"
+    },
+    {
+      "name": "program_description",
+      "pattern": "Program\\ Description:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "program_description_continuation",
+      "pattern": "Program\\ Description:[^\\n\\r]*\\r?\\n(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*([^\\n\\r]+)"
+    },
+    {
+      "name": "status",
+      "pattern": "Status:[ \\t]*(.+?)(?=[ \\t]+Exp\\ Grad\\ Date:|\\r?\\n|$)"
+    },
+    {
+      "name": "exp_grad_date",
+      "pattern": "Exp\\ Grad\\ Date:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "ft_pt",
+      "pattern": "FT/PT:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "first_term",
+      "pattern": "First\\ Term:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "lda",
+      "pattern": "LDA:[ \\t]*(.+?)(?=[ \\t]+Session:|\\r?\\n|$)"
+    },
+    {
+      "name": "session",
+      "pattern": "Session:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    }
+  ],
+  "computed_fields": [
+    {
+      "name": "campus_full",
+      "join": [
+        "campus",
+        "campus_continuation"
+      ],
+      "sep": " "
+    },
+    {
+      "name": "program",
+      "join": [
+        "program_description",
+        "program_description_continuation"
+      ],
+      "sep": " "
+    }
+  ],
+  "data_rows": {
+    "pattern": "^(\\d{2}/\\d{2}/\\d{4})\\s+([A-Za-z0-9\\-]+)\\s+(.+?)\\s+[-]?\\$\\s*([-\\d,.]+)\\s+[-]?\\$\\s*([-\\d,.]+)\\s+[-]?\\$\\s*([-\\d,.]+)$",
+    "columns": [
+      "trans_date",
+      "ledger_code",
+      "description",
+      "debit",
+      "credit",
+      "balance"
+    ]
+  },
+  "output_columns": [
+    "student_name",
+    "campus",
+    "campus_full",
+    "campus_continuation",
+    "program_description",
+    "program",
+    "program_description_continuation",
+    "status",
+    "exp_grad_date",
+    "ft_pt",
+    "first_term",
+    "lda",
+    "session",
+    "trans_date",
+    "ledger_code",
+    "description",
+    "debit",
+    "credit",
+    "balance"
+  ],
+  "ml_metadata": {
+    "synthesizer": "dbscan_spatial_ml",
+    "source_sample": "Castellanos Negron Tania_30916.pdf",
+    "detected_fields_count": 10,
+    "table_detected": true
+  }
+}

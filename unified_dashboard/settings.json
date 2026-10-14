@@ -1,0 +1,16 @@
+{
+  "headless": true,
+  "auto_open_devtools": true,
+  "download_timeout": 30,
+  "max_action_wait_seconds": 20,
+  "max_retries": 3,
+  "retry_wait_seconds": 5,
+  "log_level": "INFO",
+  "theme_accent": "#4f9cf9",
+  "default_download_dir": "",
+  "auto_clear_logs_on_start": false,
+  "confirm_on_abort": true,
+  "auto_apply_learned_devtools": true,
+  "inter_task_timeout_minutes": 15,
+  "theme": "system"
+}

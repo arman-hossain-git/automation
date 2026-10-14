@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, QCoreApplication
 from PySide6.QtWidgets import QApplication
 
 from ui_qt.views.pdf_review_view import FieldsTableModel, PdfReviewView
+from ui.pdf_review_tab import PdfReviewTab
 
 
 class TestPdfReviewCheckboxesQt(unittest.TestCase):

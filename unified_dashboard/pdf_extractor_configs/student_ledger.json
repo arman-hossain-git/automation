@@ -1,0 +1,40 @@
+{
+  "record_separator": "",
+  "exclude_patterns": [
+    "^\\*\\s*\\*\\s*pending",
+    "Page \\d+ of \\d+",
+    "^KENTUCKY WELDING INSTITUTE",
+    "^\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}",
+    "^1828 Maysville",
+    "^Phone:",
+    "^https?://",
+    "^Date\\s+Code\\s+Description",
+    "^Generated:"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "Student Ledger - (.+)",
+    "stop_at": ""
+  },
+  "summary_fields": [
+    {
+      "name": "current_balance",
+      "pattern": "Current Balance:\\s*([\\$\\d,.-]+)",
+      "column": "current_balance"
+    }
+  ],
+  "data_rows": {
+    "mode": "student_ledger",
+    "pattern": "^(\\d{2}/\\d{2}/\\d{4})\\s+([A-Z][A-Z0-9\\-]*)\\s+",
+    "columns": [
+      "date",
+      "code",
+      "description",
+      "program",
+      "payment_period",
+      "notes",
+      "amount"
+    ]
+  },
+  "repeating_sections": []
+}

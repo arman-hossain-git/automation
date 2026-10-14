@@ -18,10 +18,10 @@ if DASHBOARD_DIR not in sys.path:
 
 
 def run_app(argv=None):
-    main_file = os.path.join(DASHBOARD_DIR, "main.py")
-    spec = importlib.util.spec_from_file_location("unified_dashboard_main", main_file)
+    main_file = os.path.join(DASHBOARD_DIR, "main_qt.py")
+    spec = importlib.util.spec_from_file_location("unified_dashboard_main_qt", main_file)
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["unified_dashboard_main"] = mod
+    sys.modules["unified_dashboard_main_qt"] = mod
     spec.loader.exec_module(mod)
     return mod.run_app(argv)
 

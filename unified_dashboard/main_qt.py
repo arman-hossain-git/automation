@@ -75,13 +75,19 @@ def _handle_thread_exception(args):
     print(f"[THREAD ERROR in {args.thread.name}] {err_msg}", file=sys.stderr)
 
 
-if __name__ == "__main__":
+def run_app(argv=None):
+    if argv is None:
+        argv = sys.argv
+
     # ── High-DPI configuration (must be set before QApplication is created) ──
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(argv)
+
     app.setApplicationName("Unified System Automation Suite")
     app.setApplicationVersion("2.0")
     app.setOrganizationName("Automation Suite")
@@ -93,4 +99,8 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
 
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(run_app())

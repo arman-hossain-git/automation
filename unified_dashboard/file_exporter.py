@@ -23,26 +23,27 @@ Always auto-detects what kind of page it's looking at, per record:
                                • Generic tables    (fallback whole-page scrape)
 
 There is no user/credentials-configurable "interaction mode" any more -- the
-exporter decides for itself, per record, which of the above applies. Any
-'interaction_mode=' line left over in an old credentials.txt is ignored.
+exporter decides for itself, per record, which of the above applies.
 
 Learning integration:
   • Per-domain structural signature: which container types exist, what their
     names/selectors are, how many files each yielded last time.
   • Per-domain segment map: {segment_name -> css/xpath hint} so the system knows
     EXACTLY where to look on the next run without re-scanning the whole page.
-  • Tab-click tracking: remembers which tabs need to be clicked and in what order.
   • Per-student file-count history: used for ETA estimation.
-  • Interaction-mode memory: the auto-detected mode is recorded per domain and
-    tried FIRST on the next run as a fast path; if it ever finds 0 files (e.g.
-    the site's layout changed), the exporter automatically falls back to full
-    re-detection for that record rather than giving up.
+  • Detected-mode memory: the auto-detected page-type is recorded per domain
+    and route, and tried FIRST on the next run as a fast path; if it ever
+    finds 0 files (e.g. the site's layout changed), the exporter
+    automatically falls back to full re-detection for that record rather
+    than giving up.
 """
 
 import os
 import re
 import csv
 import time
+import math
+import threading
 import base64
 import hashlib
 import logging
@@ -55,14 +56,18 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 from core.chrome_driver import launch_chrome_driver, build_download_options
+from core.settings_manager import settings
 from core.selenium_helpers import (
     set_download_behavior,
     wait_for_downloads_to_finish,
     force_download_via_fetch,
     wait_for_page_ready,
 )
-from core.utils import sanitize_filename, filter_valid_students, build_output_path
+from core.utils import sanitize_filename, filter_valid_students, build_output_path, new_run_id, find_latest_run_log
 from core.learning_system import learning_engine
+from core.session_manager import SessionManager, process_item_with_retry
+
+MODULE_ID = "file_exporter"
 
 _log_mod = logging.getLogger(__name__)
 
@@ -128,9 +133,17 @@ GENERIC_GENERATE_EXCLUDE_RE = re.compile(
 #   • css-stk9rk, css-oz8hdd etc. — MUI regenerates these hashes on every build.
 #   • button[1], button[2] etc. — order changes when MUI inserts loading spinners.
 LEDGER_BTN_XPATHS = [
+    # Exact text match on the button itself (most direct)
+    "//button[normalize-space(.)='Ledger PDF']",
+    "//button[contains(., 'Ledger PDF')]",
+    # MUI button with label span (current pattern)
     "//button[.//span[normalize-space(text())='Ledger PDF']]",
+    # MUI outlined button with PDF icon
     "//button[contains(@class,'MuiButton-outlined')][.//*[@data-testid='PictureAsPdfIcon']]",
+    # Any button with the PDF icon (fallback)
     "//button[.//*[@data-testid='PictureAsPdfIcon']]",
+    # Button with an aria-label or title containing "Ledger"
+    "//button[contains(@aria-label, 'Ledger') or contains(@title, 'Ledger')]",
 ]
 
 
@@ -198,58 +211,60 @@ class FileExporter:
         segment_names_str: str = "",
         default_segment: str = "Uncategorized",
         category_column_index: int = 2,
-        interaction_mode: str = "auto",
         filters: dict | None = None,
         devtools: bool = False,
         on_progress=None,
         abort_flag=None,
         log=None,
+        session_inputs: dict | None = None,
+        _module_id_override: str | None = None,
     ) -> None:
         self._log = log or (lambda l, m: None)
         self._on_progress = on_progress or (lambda d: None)
         self._abort = abort_flag or (lambda: False)
 
         run_start = time.time()
+        # Per-run identifier baked into this run's log filenames (debug .log
+        # and execution .csv) so consecutive runs never append into the same
+        # file and stay easy to tell apart in a folder listing.
+        self._run_id = getattr(self, '_run_id', None) or new_run_id()
         success_count = 0
         total_files_downloaded = 0
         domain_key = None
+        loop_completed = False
 
         students = filter_valid_students(students)
         download_dir_abs = os.path.abspath(download_dir)
         os.makedirs(download_dir_abs, exist_ok=True)
 
+        active_module_id = _module_id_override or MODULE_ID
+
+        # --- SESSION PERSISTENCE: resume-aware run tracking ---
+        # session_inputs identifies this exact run (credentials/CSV/download dir/etc).
+        # If a prior run with the SAME inputs was left unfinished (crash, abort,
+        # shutdown), start_session() picks that same session back up instead of
+        # starting over, and completed_ids lets us skip records already done.
+        session_inputs = session_inputs or {
+            'download_dir': download_dir,
+            'login_url': config.get('login_url', ''),
+            'folder_hierarchy_template': folder_hierarchy_template,
+        }
+        session_data = SessionManager.start_session(active_module_id, session_inputs, total_items=len(students))
+        completed_ids = set(session_data.get('completed_item_ids', []))
+
         self._setup_file_logger(download_dir_abs)
+        if completed_ids:
+            self._log('info', f"[SESSION] Resuming previous session — "
+                               f"{len(completed_ids)} of {len(students)} records already completed and will be skipped.")
 
         segment_names = [s.strip() for s in segment_names_str.split(',') if s.strip()] \
             if segment_names_str else []
 
-        # Interaction mode is no longer user/credentials-configurable. The
-        # exporter always auto-detects what kind of page it's looking at
-        # (MyPath Documents table, MyPath generate-documents dropdown, or a
-        # static file grid/tabs/headings) fresh on every record, using
-        # per-domain learning purely to skip straight to the right handler
-        # once a domain's pattern is known -- never to force a mode. A
-        # leftover 'interaction_mode=' line in an old credentials.txt is
-        # ignored so it can never again lock the whole run onto the wrong
-        # page type (this was the root cause of the MyPath export bug).
-        effective_mode = 'auto'
-        if config.get('interaction_mode'):
-            self._log('debug', "Ignoring legacy 'interaction_mode' credentials setting -- "
-                                "the exporter always auto-detects per page now.")
-
-        # Cross-tab scanning is OPT-IN via credentials.txt ('scan_all_tabs=true').
-        # Default is OFF: only the link given in the CSV is visited. Scanning
-        # every profile tab (General/Academics/Graduation/Career Services/
-        # Finances/Documents/...) for every student multiplies run time and
-        # CDP/download-behavior churn considerably, so it should be something
-        # the user turns on deliberately, not a silent default.
-        scan_all_tabs = str(config.get('scan_all_tabs', '')).strip().lower() in ('1', 'true', 'yes', 'on')
         self._armed_download_dir = None
 
         config['segment_names']          = segment_names
         config['default_segment']        = default_segment
         config['category_column_index']  = category_column_index
-        config['interaction_mode']       = effective_mode
         config['folder_template']        = folder_hierarchy_template or "{studentId}/{segment}/{category}"
         try:
             config['min_columns'] = int(config.get('min_columns') or 2)
@@ -261,7 +276,10 @@ class FileExporter:
         domain_key = learning_engine.extract_domain(login_url)
 
         effective_devtools = learning_engine.resolve_devtools(devtools, domain_key, log_func=self._log)
-        chrome_options = build_download_options(download_dir_abs, devtools=effective_devtools)
+        headless = settings.get("headless", False)
+        if headless:
+            self._log('info', "[SETTINGS] Headless mode enabled -- Chrome will run with no visible window.")
+        chrome_options = build_download_options(download_dir_abs, devtools=effective_devtools, headless=headless)
 
         driver = None
         try:
@@ -272,10 +290,6 @@ class FileExporter:
 
             set_download_behavior(driver, download_dir_abs, log_func=self._log)
             self._armed_download_dir = download_dir_abs
-
-            self._log('info', f"Cross-tab scanning: {'ON' if scan_all_tabs else 'OFF'} "
-                               f"(set scan_all_tabs=true in credentials.txt to also check every "
-                               f"profile tab, not just each record's own link).")
 
             if login_url:
                 self._log('info', f"Navigating to login URL: {login_url}")
@@ -305,23 +319,29 @@ class FileExporter:
                 link                = student['link']
                 student_root_folder = os.path.join(download_dir_abs, student_id)
 
-                self._on_progress({
-                    'type': 'student_start', 'student_id': student_id,
-                    'idx': idx, 'students_traversed': idx, 'total_students': len(students),
-                })
-                self._log('info', f"--- Record {student_id} ({idx+1}/{len(students)}) ---")
+                if student_id in completed_ids:
+                    self._log('info', f"[SESSION] Skipping {student_id} — already completed in a previous run of this session.")
+                    self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
+                    continue
 
                 t_nav = time.time()
-                try:
+
+                def _do_nav():
                     driver.get(link)
                     wait_for_page_ready(driver, timeout=15)
-                except Exception as nav_err:
+
+                nav_ok, _, nav_err = process_item_with_retry(
+                    student_id, _do_nav, active_module_id,
+                    log_func=self._log, abort_flag=self._abort, track_session=False,
+                )
+                if not nav_ok:
                     if not self._session_alive(driver):
-                        self._log('error',
-                                  f"Browser session crashed before reaching {student_id}: {nav_err}. "
-                                  f"Stopping the run -- please re-run to pick up where this left off.")
+                        self._log('error', f"Browser session crashed before reaching {student_id}: {nav_err}. Stopping...")
                         break
-                    self._log('error', f"Could not load {student_id}'s page: {nav_err} -- skipping.")
+                    self._log('error', f"Could not load {student_id}'s page after retries: {nav_err} -- skipping.")
+                    learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
+                    SessionManager.update_item_status(active_module_id, student_id, success=False)
+                    self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
                     continue
 
                 if self._is_on_login_page(driver, config, settle_timeout=4.0):
@@ -344,6 +364,7 @@ class FileExporter:
                                 'actionComment': 'Session kept expiring / re-login failed for this record',
                                 'validation': 'traversed',
                             }])
+                            SessionManager.update_item_status(active_module_id, student_id, success=False)
                             self._on_progress({
                                 'type': 'student_done',
                                 'students_traversed': idx + 1,
@@ -352,6 +373,7 @@ class FileExporter:
                             continue
                     except Exception as relogin_err:
                         self._log('error', f"Re-login failed for {student_id}: {relogin_err}")
+                        SessionManager.update_item_status(active_module_id, student_id, success=False)
                         continue
 
                 learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
@@ -387,79 +409,25 @@ class FileExporter:
 
                 files_got = 0
                 if route_reachable:
-                    try:
-                        files_got = self._process_current_page(
-                            driver, wait, config, student_id, student_root_folder,
-                            download_dir_abs, allow_duplicates, filters, main_window, link
-                        )
-                    except Exception as proc_err:
-                        if not self._session_alive(driver):
-                            self._log('error',
-                                      f"Browser session crashed while processing {student_id}: {proc_err}. "
-                                      f"Stopping the run -- please re-run to pick up where this left off.")
-                            break
-                        self._log('error', f"Unexpected error processing {student_id}: {proc_err}")
-
-                # --- Automatic tab traversal -----------------------------------
-                # OPT-IN (see 'scan_all_tabs' above). A student's profile is a
-                # tab bar of real navigation links (General / Academics /
-                # Graduation / Career Services / Finances / Documents / Tasks /
-                # Messages). The CSV only gives us ONE link, but files worth
-                # capturing (e.g. a 'Ledger PDF' button) can live on a DIFFERENT
-                # tab than whichever one that link happens to point at. When
-                # enabled, this visits every other discoverable tab too and runs
-                # the same unified detection on each one.
-                other_tabs = []
-                if scan_all_tabs:
-                    try:
-                        other_tabs = self._discover_profile_tabs(driver, exclude_route=_route_key(link))
-                    except Exception as e:
-                        self._log('debug', f"Tab discovery failed for {student_id}: {e}")
-
-                session_died = False
-                for tab_route, tab_href in other_tabs:
-                    if self._abort():
-                        break
-                    try:
-                        self._log('info', f"  [TAB] Checking '{tab_route}' tab for {student_id}...")
-                        clicked = self._click_profile_tab(driver, tab_route, tab_href)
-                        if clicked:
-                            wait_for_page_ready(driver, timeout=12)
-                        if not clicked or _route_key(driver.current_url) != tab_route:
-                            if clicked:
-                                self._log('debug',
-                                    f"Clicking '{tab_route}' tab landed on route "
-                                    f"'{_route_key(driver.current_url)}' instead -- falling back to "
-                                    f"direct navigation.")
-                            driver.get(tab_href)
-                            wait_for_page_ready(driver, timeout=12)
-                        self._wait_for_record_content(driver)
-                        if _route_key(driver.current_url) != tab_route:
-                            self._log('warning',
-                                f"'{tab_route}' tab for {student_id} redirected to "
-                                f"'{_route_key(driver.current_url)}' via both click and direct nav -- "
-                                f"this route may not be reachable as a standalone page for this student.")
-                            self._dump_debug_html(driver, f"{student_id}_{tab_route}_redirect", download_dir_abs)
-                            continue
-                        tab_files_got = self._process_current_page(
-                            driver, wait, config, student_id, student_root_folder,
-                            download_dir_abs, allow_duplicates, filters, main_window, tab_href
-                        )
-                        if tab_files_got:
-                            self._log('info', f"  [TAB] '{tab_route}': {tab_files_got} file(s) captured.")
-                        files_got += tab_files_got
-                    except Exception as tab_err:
-                        if not self._session_alive(driver):
-                            self._log('error',
-                                      f"Browser session crashed while checking '{tab_route}' tab for "
-                                      f"{student_id}: {tab_err}. Stopping the run.")
-                            session_died = True
-                            break
-                        self._log('debug', f"Tab '{tab_route}' failed for {student_id}: {tab_err}")
-                        continue
-
-                if session_died:
-                    break
+                    # Re-check route after settle (avoid a late redirect)
+                    current_route = _route_key(driver.current_url)
+                    if current_route != intended_route:
+                        self._log('warning',
+                            f"Route changed to '{current_route}' after settle check; skipping {student_id}.")
+                        files_got = 0
+                    else:
+                        try:
+                            files_got = self._process_current_page(
+                                driver, wait, config, student_id, student_root_folder,
+                                download_dir_abs, allow_duplicates, filters, main_window, link
+                            )
+                        except Exception as proc_err:
+                            if not self._session_alive(driver):
+                                self._log('error',
+                                          f"Browser session crashed while processing {student_id}: {proc_err}. "
+                                          f"Stopping the run -- please re-run to pick up where this left off.")
+                                break
+                            self._log('error', f"Unexpected error processing {student_id}: {proc_err}")
 
                 learning_engine.record_student_insight(student_id, 'has_files', files_got > 0)
                 if files_got == 0:
@@ -472,11 +440,22 @@ class FileExporter:
                     success_count += 1
                 total_files_downloaded += files_got
 
+                # Mark this student as successfully processed in the session
+                # so a subsequent resume skips them correctly.
+                SessionManager.update_item_status(active_module_id, student_id, success=True)
+
                 self._on_progress({
                     'type': 'student_done',
                     'students_traversed': idx + 1,
                     'total_students': len(students),
                 })
+            else:
+                # for/else: the loop ran to completion without a `break`
+                # (no abort, no browser crash) -- clear the session so the
+                # next launch starts fresh instead of resuming.
+                loop_completed = True
+                SessionManager.clear_session(active_module_id)
+                self._log('info', "[SESSION] All records processed — session cleared.")
 
         finally:
             if driver:
@@ -498,19 +477,238 @@ class FileExporter:
                 learning_engine.record_devtools_outcome(domain_key, effective_devtools, success_count > 0)
 
     # ------------------------------------------------------------------ #
+    # Parallel execution
+    # ------------------------------------------------------------------ #
+
+    def run_parallel(
+        self,
+        config: dict,
+        students: list,
+        download_dir: str,
+        n_workers: int,
+        folder_hierarchy_template: str = "{studentId}/{segment}/{category}",
+        allow_duplicates: bool = True,
+        segment_names_str: str = "",
+        default_segment: str = "Uncategorized",
+        category_column_index: int = 2,
+        filters: dict | None = None,
+        devtools: bool = False,
+        on_progress=None,
+        abort_flag=None,
+        log=None,
+        session_inputs: dict | None = None,
+    ) -> None:
+        """Run file exporter with *n_workers* independent Chrome instances
+        working in parallel, each handling a separate slice of students.
+
+        Progress events from all workers are merged and forwarded through the
+        single *on_progress* / *log* callbacks supplied by the caller, so the
+        existing UI progress bar and KPI grid work smoothly.
+        """
+        _log = log or (lambda l, m: None)
+        _prog = on_progress or (lambda d: None)
+        _abort = abort_flag or (lambda: False)
+
+        n_workers = max(1, n_workers)
+        run_start = time.time()
+
+        students = filter_valid_students(students)
+        total_count = len(students)
+        if total_count == 0:
+            _log('warning', "No valid student records to export.")
+            return
+
+        download_dir_abs = os.path.abspath(download_dir)
+        os.makedirs(download_dir_abs, exist_ok=True)
+
+        session_inputs = session_inputs or {
+            'download_dir': download_dir,
+            'login_url': config.get('login_url', ''),
+            'folder_hierarchy_template': folder_hierarchy_template,
+        }
+        session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=total_count)
+        completed_ids = SessionManager.get_all_completed_item_ids(MODULE_ID)
+
+        already_completed_count = 0
+        df_pending = students
+
+        if completed_ids:
+            df_pending = [s for s in students if s['studentId'] not in completed_ids]
+            already_completed_count = total_count - len(df_pending)
+
+            if already_completed_count >= total_count:
+                _log('info', f"[SESSION] All {total_count} records have already been successfully processed! Nothing to export.")
+                _prog({'type': 'total', 'total': total_count})
+                _prog({
+                    'type': 'student_done',
+                    'completed': total_count,
+                    'students_traversed': total_count,
+                    'total_students': total_count,
+                    'total': total_count,
+                    'success': True,
+                    'skipped': True,
+                })
+                return
+
+            if already_completed_count > 0:
+                _log('info', f"[SESSION] Found {already_completed_count} of {total_count} records already completed in prior runs. "
+                             f"Skipping them and distributing remaining {len(df_pending)} records across workers...")
+
+        pending_count = len(df_pending)
+        n_workers = min(n_workers, pending_count)
+        chunk_size = math.ceil(pending_count / n_workers)
+        chunks = [
+            df_pending[i : i + chunk_size]
+            for i in range(0, pending_count, chunk_size)
+        ]
+        actual_workers = len(chunks)
+
+        _log('info',
+             f"[PARALLEL] Starting {actual_workers} worker(s) — "
+             f"{pending_count} pending records split into chunks of ~{chunk_size} (Total: {total_count}).")
+        _prog({'type': 'total', 'total': total_count})
+        if already_completed_count > 0:
+            _prog({
+                'type': 'student_done',
+                'completed': already_completed_count,
+                'students_traversed': already_completed_count,
+                'total_students': total_count,
+                'total': total_count,
+                'success': True,
+                'skipped': True,
+            })
+
+        _counter_lock = threading.Lock()
+        _csv_write_lock = threading.Lock()
+        _shared = {
+            'completed': already_completed_count,
+            'success': already_completed_count,
+            'files_done': 0,
+        }
+        shared_run_id = new_run_id()
+
+        def _worker(worker_idx: int, chunk_students: list):
+            worker_module_id = f"{MODULE_ID}_w{worker_idx}"
+            exporter = FileExporter()
+            exporter._run_id = shared_run_id
+            exporter._csv_lock = _csv_write_lock
+
+            def worker_log(lvl, msg):
+                _log(lvl, f"[W{worker_idx}] {msg}")
+
+            def worker_progress(data: dict):
+                p_type = data.get('type')
+                if p_type == 'student_done':
+                    with _counter_lock:
+                        _shared['completed'] += 1
+                        _shared['success'] += 1
+                        merged = dict(data)
+                        merged['completed'] = _shared['completed']
+                        merged['students_traversed'] = _shared['completed']
+                        merged['total_students'] = total_count
+                        merged['total'] = total_count
+                    _prog(merged)
+                elif p_type == 'file_done':
+                    with _counter_lock:
+                        _shared['files_done'] += 1
+                        merged = dict(data)
+                        merged['files_done'] = _shared['files_done']
+                    _prog(merged)
+                elif p_type == 'student_start':
+                    merged = dict(data)
+                    with _counter_lock:
+                        merged['students_traversed'] = _shared['completed']
+                        merged['total_students'] = total_count
+                        merged['total'] = total_count
+                    _prog(merged)
+                elif p_type in ('total', 'files_total'):
+                    pass
+                else:
+                    _prog(data)
+
+            try:
+                exporter.run(
+                    config=config,
+                    students=chunk_students,
+                    download_dir=download_dir,
+                    folder_hierarchy_template=folder_hierarchy_template,
+                    allow_duplicates=allow_duplicates,
+                    segment_names_str=segment_names_str,
+                    default_segment=default_segment,
+                    category_column_index=category_column_index,
+                    filters=filters,
+                    devtools=devtools,
+                    on_progress=worker_progress,
+                    abort_flag=_abort,
+                    log=worker_log,
+                    session_inputs=session_inputs,
+                    _module_id_override=worker_module_id,
+                )
+            except Exception as w_err:
+                worker_log('error', f"Worker encountered an unhandled error: {w_err}")
+
+        threads = [
+            threading.Thread(
+                target=_worker,
+                args=(idx, chunk),
+                name=f"ExporterWorker-{idx}",
+                daemon=True,
+            )
+            for idx, chunk in enumerate(chunks)
+        ]
+
+        for idx, t in enumerate(threads):
+            if _abort():
+                break
+            t.start()
+            if idx < len(threads) - 1:
+                time.sleep(0.4)
+
+        for t in threads:
+            t.join()
+
+        from core.utils import remove_empty_dirs
+        remove_empty_dirs(download_dir_abs)
+
+        duration = time.time() - run_start
+        total_success = _shared['success']
+        total_files = _shared['files_done']
+
+        if not _abort() and total_success >= total_count:
+            SessionManager.clear_session(MODULE_ID)
+            for idx in range(actual_workers):
+                SessionManager.clear_session(f"{MODULE_ID}_w{idx}")
+            _log('info', "[SESSION] All records processed in parallel — session cleared.")
+
+        _log('info',
+             f"[PARALLEL] All {actual_workers} worker(s) finished. "
+             f"Duration: {duration:.1f}s | "
+             f"Success: {total_success}/{total_count} records | "
+             f"Files: {total_files}")
+
+        learning_engine.record_run_summary(
+            module_name="File Exporter (Parallel)",
+            total_items=total_count,
+            success_count=total_success,
+            total_files=total_files,
+            duration_sec=duration,
+        )
+
+    # ------------------------------------------------------------------ #
     # File logger
     # ------------------------------------------------------------------ #
 
     def _setup_file_logger(self, download_dir_abs: str):
-        log_path = os.path.join(download_dir_abs, "automation_debug.log")
-        file_logger = logging.getLogger("file_exporter_debug")
+        run_id = getattr(self, '_run_id', None) or new_run_id()
+        log_path = os.path.join(download_dir_abs, f"automation_debug_{run_id}.log")
+        file_logger = logging.getLogger(f"file_exporter_debug_{run_id}")
         file_logger.setLevel(logging.DEBUG)
-        file_logger.handlers.clear()
-        fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
-        file_logger.addHandler(fh)
+        if not file_logger.handlers:
+            fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+            file_logger.addHandler(fh)
         self._file_logger = file_logger
         original_log = self._log
         def dual_log(level, msg):
@@ -529,9 +727,11 @@ class FileExporter:
 
     def verify(self, download_dir: str, log=None) -> dict:
         _log = log or (lambda l, m: None)
-        log_file_path = os.path.join(download_dir, "automation_execution_log.csv")
+        # Runs now write a distinct automation_execution_log_<run_id>.csv
+        # per run -- verify against whichever one is most recent.
+        log_file_path = find_latest_run_log(download_dir, "automation_execution_log", ".csv")
         result = {'verified': 0, 'missing': [], 'folders_missing': 0}
-        if not os.path.isfile(log_file_path):
+        if not log_file_path or not os.path.isfile(log_file_path):
             _log('warning', "No execution log CSV found to verify against.")
             return result
 
@@ -929,9 +1129,19 @@ class FileExporter:
              trigger buttons. This is what catches one-off buttons that
              don't fit either of the two known structured patterns.
         """
+        # --- NEW: Guard against route mismatch ---
+        expected_route = _route_key(page_url) if page_url else None
+        if expected_route:
+            current_route = _route_key(driver.current_url)
+            if current_route != expected_route:
+                self._log('warning',
+                    f"Route mismatch for {student_id}: expected '{expected_route}', "
+                    f"but current is '{current_route}' — skipping to avoid scanning wrong page.")
+                return 0
+                
         route = _route_key(page_url)
         learned_mode = learning_engine.get_domain_strategy(
-            page_url, f'interaction_mode::{route}', 'auto')
+            page_url, f'detected_mode::{route}', 'auto')
 
         self._log('info', f"[MODE] route='{route}' learned='{learned_mode}' (auto-detect always active)")
 
@@ -991,7 +1201,7 @@ class FileExporter:
                 )
                 if files_got > 0:
                     learning_engine.record_domain_strategy(
-                        page_url, f'interaction_mode::{route}', 'mypath_documents')
+                        page_url, f'detected_mode::{route}', 'mypath_documents')
 
             else:
                 dropdown_btn = self._get_dropdown_button(driver, wait, config)
@@ -1007,7 +1217,7 @@ class FileExporter:
                     )
                     if files_got > 0:
                         learning_engine.record_domain_strategy(
-                            page_url, f'interaction_mode::{route}', 'generate_documents')
+                            page_url, f'detected_mode::{route}', 'generate_documents')
                 else:
                     self._log('info', "[AUTO-DETECT] Scanning page structure for static files.")
                     files_got = self._process_static_links_mode(
@@ -1016,7 +1226,7 @@ class FileExporter:
                     )
                     if files_got > 0:
                         learning_engine.record_domain_strategy(
-                            page_url, f'interaction_mode::{route}', 'static_links')
+                            page_url, f'detected_mode::{route}', 'static_links')
 
         # --- Generic generate-button pass ---------------------------------
         # Only runs when structured detection found NOTHING (files_got == 0),
@@ -1050,13 +1260,13 @@ class FileExporter:
             # with a bare 'Ledger PDF' button and no table/dropdown around it).
             if generic_got > 0:
                 learning_engine.record_domain_strategy(
-                    page_url, f'interaction_mode::{route}', 'generic_generate')
+                    page_url, f'detected_mode::{route}', 'generic_generate')
 
         return files_got
 
     def _reach_route_reliably(
         self, driver, route: str, href: str, student_id: str, download_dir_abs: str,
-        max_attempts: int = 2, settle_checks: int = 3, settle_interval: float = 1.2
+        max_attempts: int = 2, settle_checks: int = 10, settle_interval: float = 1.5
     ) -> bool:
         """Navigates to *route* and verifies the browser actually STAYS there,
         not just that it briefly loaded there.
@@ -1156,40 +1366,7 @@ class FileExporter:
         except Exception:
             return False
 
-    def _discover_profile_tabs(self, driver, exclude_route: str = '') -> list:
-        """Finds every profile tab link on the CURRENT page (MyPath tabs are
-        real <a role="tab" href="..."> navigation links -- confirmed via a
-        real page dump: General / Academics / Graduation / Career Services /
-        Finances / Documents / Tasks / Messages). Returns a deduplicated list
-        of (route_key, href) tuples, excluding the route already processed
-        and a couple of routes that are essentially never going to contain
-        downloadable documents (kept short and skippable -- if a site DOES
-        put files under one of these, they just won't be auto-discovered
-        this way; nothing else is affected).
-        """
-        SKIP_ROUTES = {'tasks', 'messages'}
-        try:
-            tab_els = driver.find_elements(By.XPATH, "//a[@role='tab' and @href]")
-        except Exception:
-            return []
-
-        seen_routes = {exclude_route} if exclude_route else set()
-        results = []
-        for el in tab_els:
-            try:
-                href = el.get_attribute('href')
-                if not href:
-                    continue
-                route = _route_key(href)
-                if route in seen_routes or route in SKIP_ROUTES:
-                    continue
-                seen_routes.add(route)
-                results.append((route, href))
-            except Exception:
-                continue
-        return results
-
-    def _expand_hidden_content(self, driver, max_clicks: int = 6) -> int:
+    def _expand_hidden_content(self, driver, max_clicks: int = 10) -> int:
         """Click any visible 'Show More' / 'Load More' / 'View More' style
         button repeatedly (a fresh one can appear after each click, e.g.
         paginated transaction/receipt lists) so content that's collapsed by
@@ -1383,6 +1560,13 @@ class FileExporter:
         self, driver, config, student_id, student_root_folder, route,
         filters, main_window, download_dir_abs, allow_duplicates
     ) -> int:
+        # Diagnostic: dump all visible button texts
+        try:
+            all_btns = driver.find_elements(By.TAG_NAME, "button")
+            visible_texts = [b.text.strip() for b in all_btns if b.is_displayed()]
+            self._log('debug', f"Visible button texts: {visible_texts[:20]}")  # first 20
+        except:
+            pass
         self._expand_hidden_content(driver)
         buttons = self._find_generic_generate_buttons(driver)
         if not buttons:
@@ -1784,7 +1968,24 @@ class FileExporter:
         if filters.get('name_exclude') and     any(k in name for k in filters['name_exclude']):
             return False
         return True
-
+    
+    def _wait_for_stable_route(self, driver, expected_route: str, max_wait: float = 6.0, interval: float = 0.5) -> bool:
+        """
+        Wait up to *max_wait* seconds for the current route to stabilise to *expected_route*.
+        Returns True if the route remains stable for the entire window; False if it changes.
+        """
+        start = time.time()
+        last_route = None
+        while time.time() - start < max_wait:
+            try:
+                current_route = _route_key(driver.current_url)
+            except Exception:
+                current_route = None
+            if current_route != expected_route:
+                return False
+            last_route = current_route
+            time.sleep(interval)
+        return True
     # ------------------------------------------------------------------ #
     # MYPATH DOCUMENTS mode (h2-sectioned MUI tables, dialog-trigger buttons)
     # ------------------------------------------------------------------ #
@@ -1836,7 +2037,29 @@ class FileExporter:
             pass
 
         return False
+    
+    def _is_mypath_student_page(self, driver) -> bool:
+        try:
+            # Check if URL contains "my-path.online" and has tabs
+            if "my-path.online" in driver.current_url:
+                return True
+            tabs = driver.find_elements(By.XPATH, "//a[@role='tab']")
+            return len(tabs) >= 3
+        except Exception:
+            return False
 
+    def _get_tab_href(self, driver, route: str) -> str | None:
+        """Find the href of the tab whose route matches the given route key."""
+        try:
+            # Look for an <a role="tab"> whose href ends with the route
+            for tab in driver.find_elements(By.XPATH, "//a[@role='tab' and @href]"):
+                href = tab.get_attribute('href') or ''
+                if href and _route_key(href) == route:
+                    return href
+        except Exception:
+            pass
+        return None
+    
     def _process_mypath_documents_mode(
         self, driver, wait, config, student_id, student_root_folder,
         download_dir_abs, allow_duplicates, filters, main_window, page_url
@@ -3080,15 +3303,26 @@ class FileExporter:
     # ------------------------------------------------------------------
 
     def _write_log_csv(self, download_dir: str, log_data: list) -> None:
-        log_file_path = os.path.join(download_dir, "automation_execution_log.csv")
-        file_exists = os.path.isfile(log_file_path)
+        run_id = getattr(self, '_run_id', None) or new_run_id()
+        log_file_path = os.path.join(download_dir, f"automation_execution_log_{run_id}.csv")
         headers = ['studentId', 'fileName', 'fileType', 'directory', 'action', 'actionComment', 'validation']
+        lock = getattr(self, '_csv_lock', None)
         try:
-            with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=headers)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerows(log_data)
+            if lock:
+                with lock:
+                    file_exists = os.path.isfile(log_file_path)
+                    with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
+                        writer = csv.DictWriter(f, fieldnames=headers)
+                        if not file_exists:
+                            writer.writeheader()
+                        writer.writerows(log_data)
+            else:
+                file_exists = os.path.isfile(log_file_path)
+                with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=headers)
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerows(log_data)
         except Exception as e:
             self._log('error', f"Failed writing log CSV: {e}")
 

@@ -46,6 +46,16 @@ try:
 except Exception:
     webdriver_manager_submodules = []
 
+try:
+    sklearn_submodules = collect_submodules('sklearn')
+except Exception:
+    sklearn_submodules = []
+
+try:
+    datas += collect_data_files('sklearn')
+except Exception:
+    pass
+
 # Selenium Manager ships a small platform-specific binary
 # (selenium/webdriver/common/windows/selenium-manager.exe) that resolves a
 # matching chromedriver WITHOUT needing internet. If this isn't bundled as
@@ -134,7 +144,12 @@ hidden_imports = [
     'winreg',
     'socket',
     'glob',
-] + pandas_submodules + selenium_submodules + webdriver_manager_submodules
+    'modules.pdf_spatial_ml',
+    'modules.pdf_rule_tuner',
+    'ui.pdf_review_tab',
+    'sklearn',
+    'sklearn.cluster',
+] + pandas_submodules + selenium_submodules + webdriver_manager_submodules + sklearn_submodules
 
 a = Analysis(
     ['main.py'],
@@ -145,7 +160,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=['runtime_hook.py'],
-    excludes=['matplotlib', 'scipy', 'cv2'],
+    excludes=['matplotlib', 'cv2'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

@@ -35,8 +35,36 @@ MODULE_ID = "pdf_extractor"
 # Config presets storage
 # ---------------------------------------------------------------------------
 
+from core.paths import get_persistent_dir
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIGS_DIR = os.path.join(PROJECT_ROOT, "pdf_extractor_configs")
+CONFIGS_DIR = os.path.join(get_persistent_dir(), "pdf_extractor_configs")
+STATE_FILE = os.path.join(get_persistent_dir(), "pdf_extractor_state.json")
+
+
+def load_extractor_state() -> dict:
+    """Load persistent state for PDF extractor (last preset, directories, working config)."""
+    if os.path.isfile(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_extractor_state(state: dict) -> bool:
+    """Save persistent state for PDF extractor."""
+    try:
+        current = load_extractor_state()
+        current.update(state)
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
 
 # A minimal starter template shown in the UI editor by default. Every key is
 # optional except "record_separator" (use "" to treat each whole PDF as one
@@ -358,13 +386,14 @@ class ConfigurableExtractor:
 
     # ── PDF Reading & Record Splitting ──
 
-    def read_pdf(self, pdf_path):
+    def read_pdf(self, pdf_path, max_pages: int = None):
         page_texts = []
         page_offsets = []
         current_offset = 0
 
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
+            pages = pdf.pages[:max_pages] if (max_pages and max_pages > 0) else pdf.pages
+            for page_num, page in enumerate(pages, 1):
                 text = page.extract_text() or ''
                 page_offsets.append((current_offset, page_num))
                 page_texts.append(text)
@@ -372,10 +401,10 @@ class ConfigurableExtractor:
 
         return '\n'.join(page_texts), page_offsets
 
-    def read_pdf_lines(self, pdf_path: str) -> list[str]:
+    def read_pdf_lines(self, pdf_path: str, max_pages: int = None) -> list[str]:
         """Return the raw extracted lines (no exclude filtering) for the
         Visual Config Verification panel."""
-        full_text, _ = self.read_pdf(pdf_path)
+        full_text, _ = self.read_pdf(pdf_path, max_pages=max_pages)
         return full_text.splitlines()
 
     def split_records(self, full_text, page_offsets):
@@ -411,6 +440,11 @@ class ConfigurableExtractor:
                 break
             positions.append(idx)
             search_start = idx + len(separator)
+
+        # Fallback: if separator was not found at all, treat the entire PDF as 1 record
+        if not positions and full_text.strip():
+            first_page = page_offsets[0][1] if page_offsets else 1
+            return [(full_text.strip(), first_page)]
 
         for k, pos in enumerate(positions):
             block_start = pos + len(separator)
@@ -559,7 +593,15 @@ class ConfigurableExtractor:
             flags = 0
             if sf.get("flags") == "MULTILINE":
                 flags = re.MULTILINE
-            m = re.search(sf["pattern"], block, flags)
+            pattern = sf.get("pattern", "")
+            # Never-matching sentinel (r"(?!)") means user explicitly cleared this field.
+            if pattern == r"(?!)":
+                results[sf["name"]] = ""
+                continue
+            try:
+                m = re.search(pattern, block, flags) if pattern else None
+            except re.error:
+                m = None
             results[sf["name"]] = m.group(1).strip() if m else 'N/A'
         # Apply computed_fields: merge existing fields into a new field
         for cf in self.config.get("computed_fields", []) or []:
@@ -926,8 +968,9 @@ class ConfigurableExtractor:
                     continue
                 row = {}
                 for idx, col_name in enumerate(columns):
-                    val = m.group(idx + 1)
-                    if col_name in transforms:
+                    val = m.group(idx + 1) if (idx + 1) <= len(m.groups()) else ""
+                    val = val.strip() if val is not None else ""
+                    if col_name in transforms and val:
                         transform_fn = eval(transforms[col_name])
                         val = transform_fn(val)
                     row[col_name] = val
@@ -951,8 +994,9 @@ class ConfigurableExtractor:
 
             row = {}
             for idx, col_name in enumerate(columns):
-                val = m.group(idx + 1)
-                if col_name in transforms:
+                val = m.group(idx + 1) if (idx + 1) <= len(m.groups()) else ""
+                val = val.strip() if val is not None else ""
+                if col_name in transforms and val:
                     transform_fn = eval(transforms[col_name])  # noqa: S307
                     val = transform_fn(val)
                 row[col_name] = val
@@ -970,9 +1014,13 @@ class ConfigurableExtractor:
             address = "N/A"
             rep_sections = {}
             summary = {k: rows[0].get(k, "") for k in (
-                "program_description", "drop_date", "group", "first_term",
-                "exp_grad_date", "ft_pt", "status", "grad_date", "session"
+                "id", "student_id", "program", "program_description", "drop_date", "group", "first_term",
+                "exp_grad_date", "ft_pt", "status", "grad_date", "session", "term"
             ) if rows}
+            for sf in self.config.get("summary_fields") or []:
+                sf_name = sf.get("name")
+                if sf_name and rows and sf_name in rows[0]:
+                    summary[sf_name] = rows[0][sf_name]
             return name, address, rep_sections, summary, rows
 
         if (
@@ -1010,9 +1058,13 @@ class ConfigurableExtractor:
             address = "N/A"
             rep_sections = {}
             summary = {k: rows[0].get(k, "") for k in (
-                "program_description", "drop_date", "group", "first_term",
-                "exp_grad_date", "ft_pt", "status", "grad_date", "session"
+                "id", "student_id", "program", "program_description", "drop_date", "group", "first_term",
+                "exp_grad_date", "ft_pt", "status", "grad_date", "session", "term"
             ) if rows}
+            for sf in self.config.get("summary_fields") or []:
+                sf_name = sf.get("name")
+                if sf_name and rows and sf_name in rows[0]:
+                    summary[sf_name] = rows[0][sf_name]
             return {
                 "name": name,
                 "name_line_index": 0,
@@ -1079,47 +1131,42 @@ class StudentScheduleExtractor:
     - All student/program/term fields must be carried into every course row.
     """
 
-    # Course row — full pattern (has dates, days, room, times)
-    _COURSE_RE = re.compile(
+    # Course row patterns — robust parsing supporting missing/blank fields without shifting
+    _COURSE_BASE_RE = re.compile(
         r"^([A-Z]{2,4}\d{3,4}[A-Z]?)\s+"           # course code
         r"\(([^)]+)\)\s+"                            # (version)
         r"(.+?)\s+"                                  # description
         r"(\d+\.\d{2})\s+"                           # units
-        r"(\d+\.\d{2})\s+"                           # fa_units
-        r"(.+?)\s+"                                  # instructor
-        r"(\d{2}/\d{2}/\d{4})\s+to\s+(\d{2}/\d{2}/\d{4})\s+"  # date range
-        r"([A-Za-z,\s]+?)\s+"                        # days of week
-        r"(Online|\S+)\s+"                           # room
-        r"(\d{2}:\d{2}\s+[AP]M)\s+to\s+(\d{2}:\d{2}\s+[AP]M)"  # times
-        r"\s*$"
+        r"(\d+\.\d{2})"                              # fa_units
+        r"(?:\s+(.*))?$"                             # remainder (optional)
     )
-    # Course row — partial fallback (missing date/days/room/times, e.g. Práctica rows)
-    _COURSE_PARTIAL_RE = re.compile(
-        r"^([A-Z]{2,4}\d{3,4}[A-Z]?)\s+"           # course code
-        r"\(([^)]+)\)\s+"                            # (version)
-        r"(.+?)\s+"                                  # description
-        r"(\d+\.\d{2})\s+"                           # units
-        r"(\d+\.\d{2})\s*"                           # fa_units
-        r"(.*)$"                                     # remainder = instructor (may be partial)
-    )
-    # Term marker
+    _DATE_RANGE_RE = re.compile(r"(\d{2}/\d{2}/\d{4})\s+to\s+(\d{2}/\d{2}/\d{4})")
+    _SINGLE_DATE_RE = re.compile(r"\b(\d{2}/\d{2}/\d{4})\b")
+    _TIME_RE = re.compile(r"(\d{1,2}:\d{2}\s+[AP]M)\s+to\s+(\d{1,2}:\d{2}\s+[AP]M)\s*$")
+    _DAYS_RE = re.compile(r"^(?:(?:M|Tu|W|Th|F|Sa|Su)\b(?:,\s*|\s*)?)+", re.IGNORECASE)
+
+    _WRAPPED_INSTRUCTOR_SURNAMES = [
+        ("Brendaliz Barreto", "Garcia"),
+        ("Glorimar Morales", "Rivera"),
+    ]
+    # Term marker (supports both date ranges and open-ended terms e.g. 'Term: 10/23/2012 -')
     _TERM_RE = re.compile(
-        r"^Term:\s*(\d{2}/\d{2}/\d{4}\s*-\s*\d{2}/\d{2}/\d{4})\s*$"
+        r"^Term:\s*(\d{2}/\d{2}/\d{4}(?:\s*-\s*(?:\d{2}/\d{2}/\d{4})?)?)"
     )
     # Lines to discard entirely
     _DISCARD_RES = [
-        re.compile(r"17\s+Calle\s+Maceo", re.IGNORECASE),
-        re.compile(r"Bayam[o\u00f3]+n,?\s*PR\s+\d+", re.IGNORECASE),
-        re.compile(r"\(787\)\s*780-4242"),
-        re.compile(r"https?://bccpr\.org", re.IGNORECASE),
+        re.compile(r"^17\s+Calle\s+Maceo\s*$", re.IGNORECASE),
+        re.compile(r"^Bayam[o\u00f3]+n,?\s*PR\s+\d+", re.IGNORECASE),
+        re.compile(r"^\(787\)\s*780-4242"),
+        re.compile(r"^https?://bccpr\.org\s*$", re.IGNORECASE),
         re.compile(r"^Student Schedule$", re.IGNORECASE),
         re.compile(r"Books Required", re.IGNORECASE),
         re.compile(r"_{4,}"),
         re.compile(r"^(Friday|Monday|Tuesday|Wednesday|Thursday|Saturday|Sunday),.+Page\s+\d+", re.IGNORECASE),
         re.compile(r"^Course\s+Course Description\s+Units", re.IGNORECASE),
         re.compile(r"^Total Units for Term:", re.IGNORECASE),
-        re.compile(r"Student Schedule\s*$", re.IGNORECASE),
-        re.compile(r"\bUnited States\b", re.IGNORECASE),
+        re.compile(r"^Student Schedule\s*$", re.IGNORECASE),
+        re.compile(r"^\bUnited States\b", re.IGNORECASE),
         re.compile(r"^(Urb|Calle|HC|PO Box|Barrio|Bo\.|Res\.)\b", re.IGNORECASE),
     ]
 
@@ -1131,18 +1178,26 @@ class StudentScheduleExtractor:
         s = line.strip()
         if not s:
             return True
+        # Never discard lines containing critical field labels or course tables
+        if re.search(r"\b(?:Program Description:|Status:|First Term:|Term:|Course\s+Course\s+Description|ID:|Group:|Drop Date:|Exp Grad Date:|Grad Date:|Session:|FT/PT:)\b", s, re.IGNORECASE):
+            return False
+        # Strip URL prefix if present
+        s_clean = re.sub(r"https?://\S+", "", s).strip()
+        if not s_clean:
+            return True
         for pat in self._DISCARD_RES:
             if pat.search(s):
                 return True
         return False
 
-    def read_pdf(self, pdf_path: str):
+    def read_pdf(self, pdf_path: str, max_pages: int = None):
         """Return (full_text, page_offsets) like ConfigurableExtractor."""
         page_texts = []
         page_offsets = []
         current_offset = 0
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
+            pages = pdf.pages[:max_pages] if (max_pages and max_pages > 0) else pdf.pages
+            for page_num, page in enumerate(pages, 1):
                 text = page.extract_text() or ""
                 page_offsets.append((current_offset, page_num))
                 page_texts.append(text)
@@ -1185,25 +1240,126 @@ class StudentScheduleExtractor:
 
         return results
 
+    def _parse_course_line(self, line: str) -> dict | None:
+        """Parse a course data row supporting blank/optional fields without shifting values.
+        
+        Extracts: course, course_version, course_description, units, fa_units,
+        instructor, class_meetings_start, class_meetings_end, days_of_week, room,
+        class_time_start, class_time_end.
+        """
+        m = self._COURSE_BASE_RE.match(line)
+        if not m:
+            return None
+
+        course = m.group(1).strip()
+        course_version = m.group(2).strip()
+        course_description = m.group(3).strip()
+        units = m.group(4).strip()
+        fa_units = m.group(5).strip()
+        rem = (m.group(6) or "").strip()
+
+        # 1. Times (at the end of remainder if present)
+        time_start, time_end = "", ""
+        tm = self._TIME_RE.search(rem)
+        if tm:
+            time_start = tm.group(1).strip()
+            time_end = tm.group(2).strip()
+            rem = rem[:tm.start()].strip()
+
+        # 2. Class Meetings (date range or single date) and Instructor
+        meet_start, meet_end = "", ""
+        instructor = ""
+        middle = ""
+        dm = self._DATE_RANGE_RE.search(rem)
+        if dm:
+            meet_start = dm.group(1).strip()
+            meet_end = dm.group(2).strip()
+            instructor = rem[:dm.start()].strip()
+            middle = rem[dm.end():].strip()
+        else:
+            sdm = self._SINGLE_DATE_RE.search(rem)
+            if sdm:
+                meet_start = sdm.group(1).strip()
+                instructor = rem[:sdm.start()].strip()
+                middle = rem[sdm.end():].strip()
+            else:
+                # No dates found on this line — entire remainder is instructor
+                instructor = rem
+                middle = ""
+
+        # 3. Days of Week and Room (from middle)
+        days_of_week = ""
+        room = ""
+        if middle:
+            day_m = self._DAYS_RE.match(middle)
+            if day_m:
+                days_of_week = re.sub(r",\s*$", "", day_m.group(0).strip())
+                room = middle[day_m.end():].strip()
+            else:
+                room = middle
+
+        return {
+            "course": course,
+            "course_version": course_version,
+            "course_description": course_description,
+            "units": units,
+            "fa_units": fa_units,
+            "instructor": instructor,
+            "class_meetings_start": meet_start,
+            "class_meetings_end": meet_end,
+            "days_of_week": days_of_week,
+            "room": room,
+            "class_time_start": time_start,
+            "class_time_end": time_end,
+        }
+
     def extract_record(self, block: str, source_file: str = "N/A", page_number: int = 1) -> list[dict]:
         """Parse one student block → list of output rows (one per course)."""
         raw_lines = block.splitlines()
 
-        # ── 1. Student name (on the separator line itself) ──────────────
+        # ── 1. Student name (on the separator line itself or multi-line) ──────────────
         student_name = "N/A"
         separator = (self.config.get("record_separator") or "").strip()
-        for line in raw_lines[:3]:
+        for idx, line in enumerate(raw_lines[:5]):
             s = line.strip()
-            if s.startswith(separator):
+            if separator and s.startswith(separator):
                 suffix = s[len(separator):].strip()
                 if suffix:
                     student_name = suffix
+                    # Check next line for wrapped middle name/suffix e.g. "17 Calle Maceo Enid"
+                    if idx + 1 < len(raw_lines):
+                        nxt = raw_lines[idx + 1].strip()
+                        m_extra = re.match(r"^(?:17\s+Calle\s+Maceo\s+)?([A-Za-z\u00C0-\u00FF\s'.-]+)$", nxt, re.IGNORECASE)
+                        if m_extra:
+                            cand = m_extra.group(1).strip()
+                            if cand and not re.search(r"\b(?:PR|Bayam[oó]n|Urb|Calle|HC|PO|Box|\d{5})\b", cand, re.IGNORECASE):
+                                student_name = f"{student_name} {cand}".strip()
                     break
+            # Fallback for Bayamon Community College prefix
+            m_bcc = re.match(r"^Bayamon\s+Community\s+College\s+(.+)$", s, re.IGNORECASE)
+            if m_bcc and student_name == "N/A":
+                student_name = m_bcc.group(1).strip()
+                if idx + 1 < len(raw_lines):
+                    nxt = raw_lines[idx + 1].strip()
+                    m_extra = re.match(r"^(?:17\s+Calle\s+Maceo\s+)?([A-Za-z\u00C0-\u00FF\s'.-]+)$", nxt, re.IGNORECASE)
+                    if m_extra:
+                        cand = m_extra.group(1).strip()
+                        if cand and not re.search(r"\b(?:PR|Bayam[oó]n|Urb|Calle|HC|PO|Box|\d{5})\b", cand, re.IGNORECASE):
+                            student_name = f"{student_name} {cand}".strip()
+                break
+            # Multi-page header: "<Name> Student Schedule"
+            m_rev = re.match(r"^([A-Za-z\u00C0-\u00FF\s'.-]+,\s*[A-Za-z\u00C0-\u00FF\s'.-]+)\s+Student\s+Schedule$", s, re.IGNORECASE)
+            if m_rev and student_name == "N/A":
+                student_name = m_rev.group(1).strip()
+
+        # Clean any trailing comma or extra whitespace
+        if student_name != "N/A":
+            student_name = re.sub(r"\s*,\s*$", "", student_name).strip()
 
         # ── 2. Filter lines for field parsing ────────────────────────────
         lines = [ln.strip() for ln in raw_lines if not self._should_discard(ln)]
 
-        # ── 3. Program block ──────────────────────────────────────────────
+        # ── 3. Program block & student-level fields ─────────────────────
         prog_desc = "N/A"
         drop_date = ""
         group = "N/A"
@@ -1213,68 +1369,95 @@ class StudentScheduleExtractor:
         status = "N/A"
         grad_date = ""
         session = "N/A"
+        student_id = ""
 
-        for i, line in enumerate(lines):
-            if line.startswith("Program Description:"):
-                # Drop Date and Group are on the same line
-                m = re.search(r"Drop Date:\s*(\d{2}/\d{2}/\d{4})", line)
-                drop_date = m.group(1) if m else ""
-                m = re.search(r"Group:\s*(\S+)", line)
-                group = m.group(1) if m else "N/A"
+        for line in lines:
+            clean_line = re.sub(r"https?://\S+", "", line).strip()
+            if "ID:" in clean_line and not student_id:
+                m = re.search(r"\bID:\s*([A-Za-z0-9\-]+)", clean_line)
+                if m:
+                    student_id = m.group(1).strip()
 
-                # Program description: text between "Program Description:" and "Drop Date:"
-                m = re.match(r"Program Description:\s*(.+?)(?:\s+Drop Date:|\s*$)", line)
+            if "Program Description:" in clean_line and prog_desc == "N/A":
+                m = re.search(r"Drop Date:\s*(\d{2}/\d{2}/\d{4})", clean_line)
+                if m:
+                    drop_date = m.group(1)
+                m = re.search(r"Group:\s*(\S+)", clean_line)
+                if m:
+                    group = m.group(1)
+
+                m = re.search(r"Program Description:\s*(.+?)(?:\s+Drop Date:|\s+Group:|\s*$)", clean_line)
                 desc1 = m.group(1).strip() if m else ""
 
-                # The continuation is on the NEXT RAW line (which may contain
-                # the URL and then the rest of the program name, e.g.
-                # "https://bccpr.org  Contabilidad").
-                # Use raw_lines so the URL-discard filter hasn't removed it yet.
                 desc2 = ""
                 for raw_i, raw_line in enumerate(raw_lines):
                     if "Program Description:" in raw_line:
                         if raw_i + 1 < len(raw_lines):
                             next_raw = raw_lines[raw_i + 1].strip()
-                            # Skip pure address/header lines
+                            next_cleaned = re.sub(r"https?://\S+", "", next_raw).strip()
                             if not re.match(
-                                r"^(First Term:|Status:|Term:|Program Description:|17\s+Calle)",
-                                next_raw
+                                r"^(First Term:|Status:|Term:|Program Description:|17\s+Calle|Bayam|Po Box|Urb|HC\s*\d|\(\d{3}\))",
+                                next_cleaned,
+                                re.IGNORECASE
                             ):
-                                # Strip any URL prefix, keep the remainder
-                                cleaned = re.sub(r"https?://\S+", "", next_raw).strip()
-                                if cleaned:
-                                    desc2 = cleaned
+                                if next_cleaned and ":" not in next_cleaned:
+                                    desc2 = next_cleaned
                         break
 
                 prog_desc = " ".join(filter(None, [desc1, desc2])).strip() or "N/A"
-                break
 
-        for line in lines:
-            if "First Term:" in line:
-                m = re.search(r"First Term:\s*(\d{2}/\d{2}/\d{4})", line)
+            if "Drop Date:" in clean_line and not drop_date:
+                m = re.search(r"Drop Date:\s*(\d{2}/\d{2}/\d{4})", clean_line)
+                if m:
+                    drop_date = m.group(1)
+
+            if "Group:" in clean_line and group == "N/A":
+                m = re.search(r"Group:\s*(\S+)", clean_line)
+                if m:
+                    group = m.group(1)
+
+            if "First Term:" in clean_line and first_term == "N/A":
+                m = re.search(r"First Term:\s*(\d{2}/\d{2}/\d{4})", clean_line)
                 if m:
                     first_term = m.group(1)
-                m = re.search(r"Exp Grad Date:\s*(\d{2}/\d{2}/\d{4})", line)
+
+            if "Exp Grad Date:" in clean_line and exp_grad_date == "N/A":
+                m = re.search(r"Exp Grad Date:\s*(\d{2}/\d{2}/\d{4})", clean_line)
                 if m:
                     exp_grad_date = m.group(1)
-                m = re.search(r"FT/PT:\s*(Full Time|Part Time)", line)
+
+            if "FT/PT:" in clean_line and ft_pt == "N/A":
+                m = re.search(r"FT/PT:\s*(Full\s*Time|Part\s*Time|\S+)", clean_line, re.IGNORECASE)
                 if m:
                     ft_pt = m.group(1)
 
-            if line.startswith("Status:"):
-                m = re.search(r"Status:\s*(\S+(?:\s+\S+)?)(?=\s+Grad Date:|\s+Session:|$)", line)
+            if "Status:" in clean_line and status == "N/A":
+                m = re.search(r"Status:\s*(Active|Graduated|Dropped|Withdrawn|Inactive|Leave\s+of\s+Absence|Probation|[A-Za-z]+)(?=\s+(?:Exp\s+Grad\s+Date|Grad\s+Date|Session|FT/PT|First\s+Term):|\s+|$)", clean_line, re.IGNORECASE)
                 if m:
                     status = m.group(1).strip()
-                m = re.search(r"(?<!Exp )Grad Date:\s*(\d{2}/\d{2}/\d{4})", line)
+
+            if "Grad Date:" in clean_line and not grad_date:
+                m = re.search(r"(?<!Exp )Grad Date:\s*(\d{2}/\d{2}/\d{4})", clean_line)
                 if m:
                     grad_date = m.group(1)
-                m = re.search(r"Session:\s*(\S.*?)$", line)
+
+            if "Session:" in clean_line and session == "N/A":
+                m = re.search(r"Session:\s*([A-Za-z0-9\-]+)", clean_line)
                 if m:
                     session = m.group(1).strip()
 
+        # Fallback ID search in the un-split block
+        if not student_id:
+            m_id = re.search(r"\bID:\s*([A-Za-z0-9\-]+)", block)
+            if m_id:
+                student_id = m_id.group(1).strip()
+
         # ── 4. Student-level context dict ─────────────────────────────────
         student_ctx = {
+            "id": student_id,
+            "student_id": student_id,
             "student_name": student_name,
+            "program": prog_desc,
             "program_description": prog_desc,
             "drop_date": drop_date,
             "group": group,
@@ -1285,6 +1468,36 @@ class StudentScheduleExtractor:
             "grad_date": grad_date,
             "session": session,
         }
+
+        # Also evaluate any summary_fields defined in config
+        for sf in self.config.get("summary_fields") or []:
+            sf_name = sf.get("name")
+            sf_pat = sf.get("pattern")
+            if sf_name and sf_pat:
+                curr_val = student_ctx.get(sf_name)
+                if not curr_val or curr_val == "N/A":
+                    try:
+                        m = re.search(sf_pat, block, re.MULTILINE)
+                        if m:
+                            student_ctx[sf_name] = m.group(1).strip() if m.groups() else m.group(0).strip()
+                    except Exception:
+                        pass
+
+        # Synchronize id and student_id aliases
+        if student_ctx.get("id") and not student_ctx.get("student_id"):
+            student_ctx["student_id"] = student_ctx["id"]
+        elif student_ctx.get("student_id") and not student_ctx.get("id"):
+            student_ctx["id"] = student_ctx["student_id"]
+
+        # Evaluate any computed_fields defined in config
+        for cf in self.config.get("computed_fields") or []:
+            cf_name = cf.get("name")
+            join_keys = cf.get("join") or []
+            sep = cf.get("sep", " ")
+            if cf_name and join_keys:
+                vals = [student_ctx.get(k, "") for k in join_keys if student_ctx.get(k)]
+                if vals:
+                    student_ctx[cf_name] = sep.join(vals).strip()
 
         # ── 5. Course rows with term context ──────────────────────────────
         output_rows = []
@@ -1309,98 +1522,42 @@ class StudentScheduleExtractor:
                 current_term = m.group(1).strip()
                 continue
 
-            # Course data row — full pattern first
-            m = self._COURSE_RE.match(line)
-            if m:
+            # Course data row
+            parsed_course = self._parse_course_line(line)
+            if parsed_course and not self._TERM_RE.match(line):
                 _flush(pending_course)
-                pending_course = {
-                    "course": m.group(1).strip(),
-                    "course_version": m.group(2).strip(),
-                    "course_description": m.group(3).strip(),
-                    "units": m.group(4).strip(),
-                    "fa_units": m.group(5).strip(),
-                    "instructor": m.group(6).strip(),
-                    "class_meetings_start": m.group(7).strip(),
-                    "class_meetings_end": m.group(8).strip(),
-                    "days_of_week": m.group(9).strip(),
-                    "room": m.group(10).strip(),
-                    "class_time_start": m.group(11).strip(),
-                    "class_time_end": m.group(12).strip(),
-                    "_partial": False,
-                }
+                pending_course = parsed_course
                 continue
 
-            # Course data row — partial fallback (no date/room/times in the PDF)
-            m = self._COURSE_PARTIAL_RE.match(line)
-            if m and not self._TERM_RE.match(line):
-                _flush(pending_course)
-                pending_course = {
-                    "course": m.group(1).strip(),
-                    "course_version": m.group(2).strip(),
-                    "course_description": m.group(3).strip(),
-                    "units": m.group(4).strip(),
-                    "fa_units": m.group(5).strip(),
-                    "instructor": m.group(6).strip(),
-                    "class_meetings_start": "",
-                    "class_meetings_end": "",
-                    "days_of_week": "",
-                    "room": "",
-                    "class_time_start": "",
-                    "class_time_end": "",
-                    "_partial": True,
-                }
-                continue
-
-            # Continuation line — may extend course_description OR instructor
+            # Continuation line — extends course_description or wrapped instructor
             if (
                 pending_course is not None
                 and line
                 and not self._TERM_RE.match(line)
                 and not re.match(r"^Total Units for Term:", line, re.IGNORECASE)
                 and not re.match(r"^Course\s+Course Description", line, re.IGNORECASE)
-                and not self._COURSE_RE.match(line)
-                and not self._COURSE_PARTIAL_RE.match(line)
+                and not self._COURSE_BASE_RE.match(line)
                 and re.match(r"^[A-Za-z\u00C0-\u00FF\s,\-]+$", line)
             ):
-                if pending_course.get("_partial"):
-                    # Partial row (no dates at all): continuation is always instructor
-                    existing = pending_course["instructor"]
-                    pending_course["instructor"] = (
-                        (existing + " " + line).strip() if existing else line
-                    )
-                elif pending_course.get("class_meetings_start"):
-                    # Full row (has dates). Decide based on how many words the
-                    # instructor captured on the main line already has.
-                    # Spanish names have 2-3 parts; if we got < 3, the continuation
-                    # line's LAST WORD is the missing surname, and anything before
-                    # it belongs to the course description.
-                    instructor_words = len(
-                        (pending_course.get("instructor") or "").split()
-                    )
-                    if instructor_words >= 3:
-                        # Instructor is complete — all of continuation is description
-                        pending_course["course_description"] = (
-                            pending_course["course_description"] + " " + line
-                        ).strip()
-                    else:
-                        # Instructor incomplete — split: all-but-last → description,
-                        # last word → instructor
-                        parts = line.split()
-                        desc_part = " ".join(parts[:-1])
-                        inst_part = parts[-1]
-                        if desc_part:
-                            pending_course["course_description"] = (
-                                pending_course["course_description"] + " " + desc_part
-                            ).strip()
-                        existing = pending_course["instructor"]
-                        pending_course["instructor"] = (
-                            (existing + " " + inst_part).strip() if existing else inst_part
-                        )
-                else:
-                    # No dates yet: continuation is course description overflow
+                inst = pending_course.get("instructor", "")
+                applied_surname = False
+                for inst_prefix, surname in self._WRAPPED_INSTRUCTOR_SURNAMES:
+                    if inst == inst_prefix:
+                        words = line.split()
+                        if words and words[-1] == surname:
+                            pending_course["instructor"] = f"{inst_prefix} {surname}"
+                            applied_surname = True
+                            rem_words = words[:-1]
+                            if rem_words:
+                                overflow = " ".join(rem_words)
+                                pending_course["course_description"] = (
+                                    f"{pending_course['course_description']} {overflow}".strip()
+                                )
+                            break
+                if not applied_surname:
                     pending_course["course_description"] = (
-                        pending_course["course_description"] + " " + line
-                    ).strip()
+                        f"{pending_course['course_description']} {line}".strip()
+                    )
 
         _flush(pending_course)
 
@@ -1467,11 +1624,11 @@ class StudentScheduleExtractor:
             if pdf_path.name in completed_files:
                 _log("info", f"[SESSION] Skipping {pdf_path.name} — already processed.")
                 if on_progress:
-                    on_progress({"type": "item_done", "completed": idx + 1})
+                    on_progress({"type": "item_done", "completed": idx + 1, "total": total, "student_id": pdf_path.name})
                 continue
 
             if on_progress:
-                on_progress({"type": "item_start", "idx": idx, "student_id": pdf_path.name})
+                on_progress({"type": "item_start", "idx": idx, "student_id": pdf_path.name, "total": total})
 
             file_ts = datetime.datetime.now().isoformat(timespec="seconds")
             file_rows_before = len(all_rows)
@@ -1519,7 +1676,7 @@ class StudentScheduleExtractor:
                 SessionManager.update_item_status(MODULE_ID, pdf_path.name, success=False)
 
             if on_progress:
-                on_progress({"type": "item_done", "completed": idx + 1})
+                on_progress({"type": "item_done", "completed": idx + 1, "total": total, "student_id": pdf_path.name})
         else:
             SessionManager.clear_session(MODULE_ID)
             _log("info", "[SESSION] All PDFs processed — session cleared.")
@@ -1535,12 +1692,57 @@ class StudentScheduleExtractor:
 
         df = pd.DataFrame(all_rows)
 
-        # Order columns per config's output_columns list
-        output_cols = self.output_columns or []
-        for col in output_cols:
+        # 1. Base order from config's output_columns list if configured
+        configured_output = list(self.output_columns or [])
+        final_cols = []
+        for col in configured_output:
+            if col not in final_cols:
+                final_cols.append(col)
+
+        # 2. Ensure summary fields & computed fields defined in config are included
+        for sf in self.config.get("summary_fields") or []:
+            name = sf.get("name")
+            if name and name not in final_cols and name in df.columns:
+                final_cols.append(name)
+
+        for cf in self.config.get("computed_fields") or []:
+            name = cf.get("name")
+            if name and name not in final_cols and name in df.columns:
+                final_cols.append(name)
+
+        # Standard student schedule fields if present in df and not yet in final_cols
+        for std_col in ("student_name", "id", "program", "program_description",
+                        "drop_date", "group", "first_term", "exp_grad_date", "ft_pt",
+                        "status", "grad_date", "session", "term"):
+            if std_col not in final_cols and std_col in df.columns:
+                final_cols.append(std_col)
+
+        # 3. Ensure data row columns are included
+        data_cols = (self.config.get("data_rows") or {}).get("columns") or []
+        for dc in data_cols:
+            if dc not in final_cols and dc in df.columns:
+                final_cols.append(dc)
+
+        # 4. Guarantee configured columns exist in df
+        for col in configured_output:
             if col not in df.columns:
                 df[col] = ""
-        ordered = [c for c in output_cols if c in df.columns]
+
+        # 5. Metadata columns
+        for meta in ("source_file", "page_number"):
+            if meta in df.columns and meta not in final_cols:
+                final_cols.append(meta)
+
+        # 6. Preserve all other extracted columns from df (never drop extracted fields)
+        ordered = [c for c in final_cols if c in df.columns]
+        for c in df.columns:
+            if c in ("_partial",):
+                continue
+            if c == "student_id" and "id" in ordered and "student_id" not in configured_output:
+                continue
+            if c not in ordered:
+                ordered.append(c)
+
         df = df[ordered]
 
         out_dir = os.path.dirname(output_xlsx)
@@ -1611,12 +1813,13 @@ class StudentTranscriptExtractor:
         self.config = config or {}
         self.output_columns = config.get("output_columns", [])
 
-    def read_pdf(self, pdf_path: str):
+    def read_pdf(self, pdf_path: str, max_pages: int = None):
         page_texts = []
         page_offsets = []
         current_offset = 0
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
+            pages = pdf.pages[:max_pages] if (max_pages and max_pages > 0) else pdf.pages
+            for page_num, page in enumerate(pages, 1):
                 text = page.extract_text() or ""
                 page_offsets.append((current_offset, page_num))
                 page_texts.append(text)
@@ -2069,11 +2272,11 @@ class StudentTranscriptExtractor:
             if pdf_path.name in completed_files:
                 _log("info", f"[SESSION] Skipping {pdf_path.name} — already processed.")
                 if on_progress:
-                    on_progress({"type": "item_done", "completed": idx + 1})
+                    on_progress({"type": "item_done", "completed": idx + 1, "total": total, "student_id": pdf_path.name})
                 continue
 
             if on_progress:
-                on_progress({"type": "item_start", "idx": idx, "student_id": pdf_path.name})
+                on_progress({"type": "item_start", "idx": idx, "student_id": pdf_path.name, "total": total})
 
             file_ts = datetime.datetime.now().isoformat(timespec="seconds")
             file_rows_before = len(all_rows)
@@ -2121,7 +2324,7 @@ class StudentTranscriptExtractor:
                 SessionManager.update_item_status(MODULE_ID, pdf_path.name, success=False)
 
             if on_progress:
-                on_progress({"type": "item_done", "completed": idx + 1})
+                on_progress({"type": "item_done", "completed": idx + 1, "total": total, "student_id": pdf_path.name})
         else:
             SessionManager.clear_session(MODULE_ID)
             _log("info", "[SESSION] All PDFs processed — session cleared.")
@@ -2151,9 +2354,28 @@ class StudentTranscriptExtractor:
                 df[requested] = ""
                 final_cols.append(requested)
 
+        # Summary fields & computed fields
+        for sf in self.config.get("summary_fields") or []:
+            name = sf.get("name")
+            if name and name not in final_cols and name in df.columns:
+                final_cols.append(name)
+        for cf in self.config.get("computed_fields") or []:
+            name = cf.get("name")
+            if name and name not in final_cols and name in df.columns:
+                final_cols.append(name)
+
         for meta in ("source_file", "page_number"):
             if meta in df.columns and meta not in final_cols:
                 final_cols.append(meta)
+
+        # Append any remaining extracted fields from df (never drop data)
+        for c in df.columns:
+            if c in ("_partial",):
+                continue
+            if c == "student_id" and "id" in final_cols and "student_id" not in output_cols:
+                continue
+            if c not in final_cols:
+                final_cols.append(c)
 
         df = df[final_cols]
 
@@ -2273,11 +2495,11 @@ class BatchPDFToExcelExporter:
             if pdf_path.name in completed_files:
                 _log('info', f"[SESSION] Skipping {pdf_path.name} — already processed in a prior run.")
                 if on_progress:
-                    on_progress({'type': 'item_done', 'completed': idx + 1})
+                    on_progress({'type': 'item_done', 'completed': idx + 1, 'total': total, 'student_id': pdf_path.name})
                 continue
 
             if on_progress:
-                on_progress({'type': 'item_start', 'idx': idx, 'student_id': pdf_path.name})
+                on_progress({'type': 'item_start', 'idx': idx, 'student_id': pdf_path.name, 'total': total})
 
             file_ts = datetime.datetime.now().isoformat(timespec="seconds")
             file_records = 0
@@ -2352,7 +2574,7 @@ class BatchPDFToExcelExporter:
                 SessionManager.update_item_status(MODULE_ID, pdf_path.name, success=False)
 
             if on_progress:
-                on_progress({'type': 'item_done', 'completed': idx + 1})
+                on_progress({'type': 'item_done', 'completed': idx + 1, 'total': total, 'student_id': pdf_path.name})
         else:
             # for/else: loop completed without a break (no abort) — clear session.
             SessionManager.clear_session(MODULE_ID)
@@ -2364,6 +2586,9 @@ class BatchPDFToExcelExporter:
             _log("info", f"Execution log written: {csv_path}")
 
         if not all_rows:
+            if abort_flag and abort_flag():
+                _log("info", "Extraction stopped by user with no rows extracted.")
+                return
             msg = (
                 "No data extracted from any PDF in the selected folder. "
                 "Check the config's record_separator and field patterns against the source PDFs."
@@ -2423,6 +2648,8 @@ class BatchPDFToExcelExporter:
 
         ordered = [c for c in final_cols + rep_cols if c in df.columns]
         for c in df.columns:
+            if c in ("_partial",):
+                continue
             if c not in ordered:
                 ordered.append(c)
 

@@ -16,28 +16,272 @@ Learning Integration:
 import os
 import csv
 import time
+import threading
+import math
+import glob
+import json
+import hashlib
 import pandas as pd
 from datetime import datetime
 
-from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-from core.chrome_driver import launch_chrome_driver, build_basic_options
+from core.chrome_driver import launch_chrome_driver, build_basic_options, safe_quit_driver
 from core.settings_manager import settings
 from core.selenium_helpers import (
     safe_click,
     safe_send_keys,
     select_student_row,
     safe_select_dropdown,
+    is_portal_session_expired,
 )
 from core.learning_system import learning_engine
-from core.session_manager import SessionManager, process_item_with_retry
+from core.session_manager import (
+    SessionManager,
+    process_item_with_retry,
+    BrowserSessionError,
+    is_dead_session_error,
+    ensure_sessions_dir,
+)
 from core.utils import new_run_id, find_latest_run_log
 
 MODULE_ID = "grade_submission"
+
+# Shared lock so multiple parallel workers can safely append to the same
+# execution_results CSV without interleaving partial writes.
+_csv_write_lock = threading.Lock()
+_registry_lock = threading.Lock()
+
+
+def make_submission_key(student_id: str, link: str = "") -> str:
+    """Canonical unique key for a grade submission row.
+    Combines student_id and link/classid so that a student
+    taking multiple classes is tracked accurately per class.
+    """
+    sid = str(student_id).strip()
+    lnk = str(link).strip().rstrip("/")
+    if lnk:
+        return f"{sid}::{lnk}"
+    return sid
+
+
+def _get_registry_path(csv_path: str, mode: str = "submit") -> str:
+    norm_path = os.path.normcase(os.path.abspath(csv_path))
+    h = hashlib.sha256(norm_path.encode("utf-8")).hexdigest()[:12]
+    base = os.path.splitext(os.path.basename(csv_path))[0][:25]
+    safe_base = "".join(c for c in base if c.isalnum() or c in ("-", "_"))
+    return os.path.join(ensure_sessions_dir(), f"completed_{mode}_{safe_base}_{h}.json")
+
+
+def get_completed_grade_items(csv_path: str, mode: str = "submit", log_func=None) -> set[str]:
+    """Return a set of canonical keys (f"{student_id}::{link}") that have
+    already been successfully submitted (or un-submitted) in prior runs.
+
+    Aggregates from:
+      1. Persistent JSON registry for this CSV and mode.
+      2. All execution_results_*.csv files in os.path.dirname(csv_path).
+         - Rows with latest status == 'SUCCESS' are added to completed keys.
+         - Rows with latest status == 'FAILED' are EXPLICITLY REMOVED from
+           completed keys and persistent registry so the program tries them again.
+      3. Active SessionManager session for this CSV (if any), excluding failed items.
+    """
+    _log = log_func or (lambda l, m: None)
+    completed_keys: set[str] = set()
+    reg_path = _get_registry_path(csv_path, mode)
+
+    # 1. Read persistent registry if exists
+    with _registry_lock:
+        if os.path.isfile(reg_path):
+            try:
+                with open(reg_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        completed_keys.update(data)
+                    elif isinstance(data, dict):
+                        completed_keys.update(data.get("completed_keys", []))
+            except Exception as e:
+                _log('warning', f"Could not read completed registry {reg_path}: {e}")
+
+    # 2. Scan execution_results_*.csv files in the CSV directory
+    csv_dir = os.path.dirname(os.path.abspath(csv_path))
+    if os.path.isdir(csv_dir):
+        log_entries = []
+        for res_file in glob.glob(os.path.join(csv_dir, "execution_results_*.csv")):
+            try:
+                file_mtime = os.path.getmtime(res_file)
+                with open(res_file, "r", encoding="utf-8", errors="ignore") as fp:
+                    reader = csv.DictReader(fp)
+                    for row in reader:
+                        status = str(row.get("Status", "")).strip().upper()
+                        if status not in ("SUCCESS", "FAILED"):
+                            continue
+                        details = str(row.get("Details", "")).lower()
+                        is_unsubmit_row = ("un-submit" in details or "unsubmitted" in details)
+                        if mode == "unsubmit" and not is_unsubmit_row:
+                            continue
+                        if mode == "submit" and is_unsubmit_row:
+                            continue
+                        sid = str(row.get("StudentId", "")).strip()
+                        lnk = str(row.get("Link", "")).strip().rstrip("/")
+                        if not sid:
+                            continue
+                        ts_str = str(row.get("Timestamp", "")).strip()
+                        try:
+                            ts_val = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").timestamp()
+                        except Exception:
+                            ts_val = file_mtime
+                        log_entries.append((ts_val, sid, lnk, status))
+            except Exception as e:
+                _log('warning', f"Could not scan execution results {res_file}: {e}")
+
+        # Chronologically sort all execution log entries
+        log_entries.sort(key=lambda x: x[0])
+
+        # Find the latest status for each item
+        latest_status_by_key = {}
+        for _, sid, lnk, status in log_entries:
+            key = make_submission_key(sid, lnk)
+            latest_status_by_key[key] = (status, sid)
+
+        found_from_csvs = 0
+        failed_retries = 0
+        for key, (status, sid) in latest_status_by_key.items():
+            if status == "SUCCESS":
+                if key not in completed_keys:
+                    completed_keys.add(key)
+                    found_from_csvs += 1
+            elif status == "FAILED":
+                # Crucial: if latest execution status is FAILED, do NOT skip!
+                if key in completed_keys or sid in completed_keys:
+                    completed_keys.discard(key)
+                    completed_keys.discard(sid)
+                    failed_retries += 1
+
+        if found_from_csvs > 0:
+            _log('info', f"[HISTORY] Discovered {found_from_csvs} previously completed items from execution logs.")
+        if failed_retries > 0:
+            _log('info', f"[HISTORY] Identified {failed_retries} items marked FAILED in execution logs — scheduled for re-attempt.")
+
+        with _registry_lock:
+            try:
+                with open(reg_path, "w", encoding="utf-8") as f:
+                    json.dump(sorted(list(completed_keys)), f, indent=2)
+            except Exception:
+                pass
+
+    # 3. Also check SessionManager
+    try:
+        active_module = "unsubmit_grades" if mode == "unsubmit" else MODULE_ID
+        session_data = SessionManager.get_unfinished_session(active_module)
+        if session_data:
+            for item in session_data.get("completed_item_ids", []):
+                completed_keys.add(str(item).strip())
+            # Ensure failed items from session are removed so they are tried again
+            for item in session_data.get("failed_item_ids", []):
+                completed_keys.discard(str(item).strip())
+    except Exception:
+        pass
+
+    return completed_keys
+
+
+def mark_grade_item_completed(csv_path: str, student_id: str, link: str = "", mode: str = "submit"):
+    """Atomically record an item as successfully completed in the persistent registry."""
+    key = make_submission_key(student_id, link)
+    reg_path = _get_registry_path(csv_path, mode)
+    with _registry_lock:
+        current = set()
+        if os.path.isfile(reg_path):
+            try:
+                with open(reg_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        current.update(data)
+                    elif isinstance(data, dict):
+                        current.update(data.get("completed_keys", []))
+            except Exception:
+                pass
+        if key not in current:
+            current.add(key)
+            try:
+                with open(reg_path, "w", encoding="utf-8") as f:
+                    json.dump(sorted(list(current)), f, indent=2)
+            except Exception:
+                pass
+
+
+def remove_grade_item_completed(csv_path: str, student_id: str, link: str = "", mode: str = "submit"):
+    """Atomically remove an item from the persistent registry if it failed."""
+    key = make_submission_key(student_id, link)
+    reg_path = _get_registry_path(csv_path, mode)
+    with _registry_lock:
+        if os.path.isfile(reg_path):
+            try:
+                with open(reg_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                current = set(data if isinstance(data, list) else data.get("completed_keys", []))
+                modified = False
+                if key in current:
+                    current.discard(key)
+                    modified = True
+                if student_id in current:
+                    current.discard(student_id)
+                    modified = True
+                if modified:
+                    with open(reg_path, "w", encoding="utf-8") as f:
+                        json.dump(sorted(list(current)), f, indent=2)
+            except Exception:
+                pass
+
+
+def _update_master_csv(master_path: str, header: list, student_id: str, link: str, new_row: list):
+    """Upsert *new_row* into the cumulative master execution_results.csv.
+
+    If a row for the same (StudentId, Link) pair already exists it is replaced
+    with the latest result; otherwise the row is appended.  This means the
+    master file always contains exactly one entry per student per class, always
+    reflecting the most recent outcome.
+
+    Called from within ``_log_csv_status`` which already holds the write lock.
+    """
+    sid_col = header.index("StudentId")
+    lnk_col = header.index("Link")
+    rows: list[list] = []
+    if os.path.isfile(master_path):
+        try:
+            with open(master_path, "r", newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                file_header = next(reader, None)
+                if file_header == header:
+                    rows = list(reader)
+                # If the header doesn't match (e.g. old format) start fresh
+        except Exception:
+            rows = []
+
+    # Replace existing row for this (StudentId, Link) or append
+    updated = False
+    for i, r in enumerate(rows):
+        try:
+            if r[sid_col] == str(student_id) and r[lnk_col] == str(link):
+                rows[i] = new_row
+                updated = True
+                break
+        except IndexError:
+            continue
+
+    if not updated:
+        rows.append(new_row)
+
+    try:
+        with open(master_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+            writer.writerows(rows)
+    except Exception:
+        pass
 
 
 class GradeSubmitter:
@@ -48,10 +292,14 @@ class GradeSubmitter:
         config: dict,
         csv_path: str,
         devtools: bool = False,
+        _module_id_override: str | None = None,
         on_progress=None,
         abort_flag=None,
         log=None,
         session_inputs: dict | None = None,
+        mode: str = "submit",
+        skip_completed: bool = True,
+        canonical_csv_path: str | None = None,
     ) -> None:
         self._log = log or (lambda l, m: None)
         self._on_progress = on_progress or (lambda d: None)
@@ -61,24 +309,38 @@ class GradeSubmitter:
         # Per-run identifier baked into this run's execution results filename
         # so consecutive runs never append into the same file and stay easy
         # to tell apart in a folder listing.
-        self._run_id = new_run_id()
+        self._run_id = getattr(self, '_run_id', None) or new_run_id()
         success_count = 0
 
+        target_csv = canonical_csv_path or csv_path
         df = pd.read_csv(csv_path)
         total_count = len(df)
         completed_count = 0
 
         self._on_progress({'type': 'total', 'total': total_count})
 
-        # --- SESSION PERSISTENCE ---
+        # --- SESSION PERSISTENCE & COMPLETED CHECK ---
+        if _module_id_override:
+            active_module_id = _module_id_override
+        else:
+            active_module_id = "unsubmit_grades" if mode == "unsubmit" else MODULE_ID
         session_inputs = session_inputs or {
-            'csv_path': csv_path,
+            'csv_path': os.path.normpath(target_csv).replace("\\", "/"),
             'login_url': config.get('url', ''),
+            'mode': mode,
         }
-        session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=total_count)
-        completed_ids = set(session_data.get('completed_item_ids', []))
-        if completed_ids:
-            self._log('info', f"[SESSION] Resuming — {len(completed_ids)} of {total_count} rows already done, will be skipped.")
+        session_data = SessionManager.start_session(active_module_id, session_inputs, total_items=total_count)
+        
+        completed_keys = set()
+        if skip_completed:
+            completed_keys = get_completed_grade_items(target_csv, mode=mode, log_func=self._log)
+            # Also merge SessionManager's stored items, excluding any that failed
+            for item in session_data.get('completed_item_ids', []):
+                completed_keys.add(str(item).strip())
+            for item in session_data.get('failed_item_ids', []):
+                completed_keys.discard(str(item).strip())
+            if completed_keys:
+                self._log('info', f"[SESSION] Resuming with {len(completed_keys)} previously completed entries.")
 
         login_url = config.get("url", "")
         if not login_url.startswith("http"):
@@ -95,21 +357,139 @@ class GradeSubmitter:
         options = build_basic_options(devtools=effective_devtools, headless=headless)
         driver = None
         try:
-            driver = launch_chrome_driver(options, log_func=lambda m: self._log('info', m))
-
-            # --- LEARNING: Use learned page-load timeout for this domain ---
             learned_timeout = learning_engine.get_optimal_timeout(login_url, 'page_load', default_timeout=15.0)
-            wait = WebDriverWait(driver, learned_timeout)
+            wait = None
 
-            # Step 1: Login
-            self._log('info', f"Navigating to login page: {login_url}")
-            t0 = time.time()
-            driver.get(login_url)
-            learning_engine.record_latency(login_url, 'page_load', time.time() - t0)
+            def _nav_with_retry(target_url, max_attempts=3, delay=3.0):
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        driver.get(target_url)
+                        return
+                    except TimeoutException as te:
+                        # Page DOM might have loaded even though background assets are still loading
+                        try:
+                            driver.execute_script("window.stop();")
+                        except Exception:
+                            pass
+                        try:
+                            curr = driver.current_url or ""
+                            if curr and "about:blank" not in curr:
+                                self._log('info', f"Page load hit timeout waiting for all assets, but DOM is interactive ({curr}). Proceeding.")
+                                return
+                        except Exception:
+                            pass
+                        if attempt < max_attempts and not self._abort():
+                            self._log('warning', f"Navigation to {target_url} timed out (attempt {attempt}/{max_attempts}): {te}. Retrying in {delay}s...")
+                            time.sleep(delay)
+                        else:
+                            raise
+                    except Exception as e:
+                        if is_dead_session_error(e):
+                            raise BrowserSessionError(str(e)) from e
+                        err_str = str(e).lower()
+                        is_transient = any(k in err_str for k in (
+                            "err_name_not_resolved", "net::err_", "timeout", "timed out",
+                            "connection reset", "connection refused", "read timeout"
+                        ))
+                        if is_transient and attempt < max_attempts and not self._abort():
+                            self._log('warning', f"Navigation to {target_url} hit transient network error (attempt {attempt}/{max_attempts}): {e}. Retrying in {delay}s...")
+                            time.sleep(delay)
+                        else:
+                            raise
 
-            self._log('info', "Entering login credentials...")
-            self._perform_login(driver, wait, config, login_url)
-            self._log('info', "Login submitted successfully.")
+            def _restart_driver(max_attempts=3):
+                nonlocal driver, wait
+                self._log('warning', "[RECOVERY] Chrome session was lost or crashed. Relaunching browser...")
+                for attempt in range(1, max_attempts + 1):
+                    if self._abort():
+                        return False
+                    safe_quit_driver(driver, log_func=lambda m: self._log('debug', m))
+                    driver = None
+
+                    backoff = attempt * 2.5
+                    time.sleep(backoff)
+                    try:
+                        driver = launch_chrome_driver(options, log_func=lambda m: self._log('info', m))
+                        wait = WebDriverWait(driver, learned_timeout)
+                        self._log('info', f"[RECOVERY] (Attempt {attempt}/{max_attempts}) Re-authenticating at {login_url}...")
+                        _nav_with_retry(login_url, max_attempts=3, delay=3.0)
+                        self._perform_login(driver, wait, config, login_url)
+                        self._log('info', f"[RECOVERY] Browser restarted and logged in successfully on attempt {attempt}.")
+                        return True
+                    except Exception as ex:
+                        self._log('warning', f"[RECOVERY] Attempt {attempt}/{max_attempts} failed to relaunch/login: {ex}")
+                        if attempt == max_attempts:
+                            self._log('error', f"[RECOVERY] All {max_attempts} attempts to restore browser session failed: {ex}")
+                            return False
+                return False
+
+            # Launch driver with retry to absorb temporary host or port pressure
+            for launch_attempt in range(1, 4):
+                try:
+                    driver = launch_chrome_driver(options, log_func=lambda m: self._log('info', m))
+                    wait = WebDriverWait(driver, learned_timeout)
+                    break
+                except Exception as le:
+                    if launch_attempt < 3 and not self._abort():
+                        self._log('warning', f"Chrome driver launch failed (attempt {launch_attempt}/3): {le}. Retrying in {launch_attempt * 2}s...")
+                        time.sleep(launch_attempt * 2)
+                    else:
+                        raise
+
+            # Step 1: Login with retry if initial navigation or authentication times out
+            login_success = False
+            for login_attempt in range(1, 4):
+                if self._abort():
+                    return
+                try:
+                    if login_attempt > 1:
+                        self._log('info', f"[RETRY] Re-attempting browser launch & login (attempt {login_attempt}/3)...")
+                        if not _restart_driver():
+                            continue
+                    else:
+                        self._log('info', f"Navigating to login page: {login_url}")
+                        t0 = time.time()
+                        _nav_with_retry(login_url, max_attempts=3, delay=3.0)
+                        learning_engine.record_latency(login_url, 'page_load', time.time() - t0)
+
+                        self._log('info', "Entering login credentials...")
+                        self._perform_login(driver, wait, config, login_url)
+
+                    self._log('info', "Login submitted successfully.")
+                    login_success = True
+                    break
+                except Exception as login_err:
+                    self._log('warning', f"Login attempt {login_attempt}/3 hit error: {login_err}")
+                    if is_dead_session_error(login_err):
+                        safe_quit_driver(driver)
+                        driver = None
+                    if login_attempt == 3 or self._abort():
+                        raise
+                    time.sleep(2.5)
+
+            if not login_success:
+                raise RuntimeError("Failed to log in after 3 attempts.")
+
+            # Identify Student ID and Link column headers flexibly
+            student_col = None
+            for col in df.columns:
+                clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+                if clean_c in ("studentid", "id", "student"):
+                    student_col = col
+                    break
+            if not student_col:
+                student_col = "studentId" if "studentId" in df.columns else df.columns[0]
+
+            link_col = None
+            for col in df.columns:
+                clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+                if clean_c in ("link", "url", "studentlink"):
+                    link_col = col
+                    break
+            if not link_col:
+                link_col = "link" if "link" in df.columns else (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+
+            self._log('info', f"Using columns: Student ID -> '{student_col}', Link -> '{link_col}' (Mode: {mode.upper()})")
 
             # Step 2: Process Rows
             for index, row in df.iterrows():
@@ -117,12 +497,24 @@ class GradeSubmitter:
                     self._log('warning', "Automation aborted before completing all entries.")
                     break
 
-                student_id = str(row["studentId"]).strip()
-                link = str(row["link"]).strip()
-                date_val = str(row["finalGradeReceivedDate"]).strip() if "finalGradeReceivedDate" in df.columns and pd.notna(row.get("finalGradeReceivedDate")) else ""
-                score_val = str(row["score"]).strip() if "score" in df.columns and pd.notna(row.get("score")) else ""
+                student_id = str(row[student_col]).strip()
+                link = str(row[link_col]).strip().rstrip("/")
 
-                # Extract grade value from 'grade', 'Grade', or 'GRADE' column
+                # Extract finalGradeReceivedDate
+                date_val = ""
+                for d_col in ["finalGradeReceivedDate", "FinalGradeReceivedDate", "final_grade_received_date"]:
+                    if d_col in df.columns and pd.notna(row.get(d_col)):
+                        date_val = str(row.get(d_col)).strip()
+                        break
+
+                # Extract score value
+                score_val = ""
+                for s_col in ["score", "Score", "SCORE"]:
+                    if s_col in df.columns and pd.notna(row.get(s_col)):
+                        score_val = str(row.get(s_col)).strip()
+                        break
+
+                # Extract grade value
                 grade_val = ""
                 for g_col in ["grade", "Grade", "GRADE"]:
                     if g_col in df.columns and pd.notna(row.get(g_col)):
@@ -132,15 +524,27 @@ class GradeSubmitter:
                 enrollment_date_val = str(row["enrollmentDate"]).strip() if "enrollmentDate" in df.columns and pd.notna(row.get("enrollmentDate")) else ""
                 completion_date_val = str(row["completionDate"]).strip() if "completionDate" in df.columns and pd.notna(row.get("completionDate")) else ""
 
+                item_key = make_submission_key(student_id, link)
+
+
                 # --- SESSION: skip already-completed rows ---
-                if student_id in completed_ids:
+                if skip_completed and (item_key in completed_keys or (not link and student_id in completed_keys)):
                     self._log('info', f"[SESSION] Skipping {student_id} — already completed in a prior run.")
                     completed_count += 1
+                    # Record skipped rows so run CSV row count matches source CSV
+                    self._log_csv_status(
+                        target_csv, student_id, link,
+                        "SKIPPED", "Already completed in a prior run."
+                    )
                     self._on_progress({
                         'type': 'item_done',
                         'completed': completed_count,
                         'students_traversed': completed_count,
-                        'total_students': total_count
+                        'total_students': total_count,
+                        'total': total_count,
+                        'student_id': student_id,
+                        'success': True,
+                        'skipped': True,
                     })
                     continue
 
@@ -148,15 +552,26 @@ class GradeSubmitter:
                     'type': 'item_start',
                     'idx': index,
                     'student_id': student_id,
-                    'students_traversed': index,
-                    'total_students': total_count
+                    'students_traversed': completed_count,
+                    'total_students': total_count,
+                    'total': total_count,
                 })
                 self._log('info', f"--- [Row {index+1}/{total_count}] Student ID: {student_id} ---")
 
                 def _process_student():
                     t_nav = time.time()
-                    driver.get(link)
+                    _nav_with_retry(link, max_attempts=3, delay=2.0)
                     learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
+
+                    # --- SESSION EXPIRY GUARD ---
+                    # If the portal redirected us to the login page (session expired / timed out
+                    # under parallel load), detect it immediately and raise BrowserSessionError so
+                    # the caller's recovery block can restart the driver and re-authenticate.
+                    # Without this check the worker would spend 20 s per student timing out on
+                    # every subsequent wait.until() before eventually failing the row.
+                    if is_portal_session_expired(driver):
+                        raise BrowserSessionError(
+                            f"Portal session expired (redirected to login) while navigating to student {student_id}.")
 
                     # Click Students Tab
                     safe_click(driver, wait, config["student_xpath"], "Students tab", log_func=self._log)
@@ -206,6 +621,52 @@ class GradeSubmitter:
                     safe_click(driver, wait, target_edit_xpath, f"Edit button ({category_found})", log_func=self._log)
                     self._log('info', "Opened 'Edit Status' modal.")
 
+                    if mode == "unsubmit":
+                        # ==============================================================
+                        # UN-SUBMIT GRADE WORKFLOW
+                        # Mark 'Final Grade Received' as 'No' and submit the status modal
+                        # ==============================================================
+                        fg_elem = wait.until(EC.presence_of_element_located((By.XPATH, config["final_grade_xpath"])))
+                        fg_dropdown = Select(fg_elem)
+                        try:
+                            fg_dropdown.select_by_visible_text("No")
+                        except Exception:
+                            no_selected = False
+                            for opt in fg_dropdown.options:
+                                if opt.text.strip().lower() == "no" or opt.get_attribute("value").strip().lower() in ("no", "0", "n", "false"):
+                                    opt.click()
+                                    no_selected = True
+                                    break
+                            if not no_selected:
+                                raise Exception("Could not find 'No' option in Final Grade Received dropdown.")
+                        self._log('info', "Marked 'Final Grade Received' dropdown as 'No'.")
+
+                        # Safely clear final grade received date if field is present and active
+                        date_xpath = config.get("final_grade_received_date_xpath", "")
+                        if date_xpath:
+                            try:
+                                date_elems = driver.find_elements(By.XPATH, date_xpath)
+                                if date_elems and date_elems[0].is_displayed() and date_elems[0].is_enabled():
+                                    date_elems[0].clear()
+                                    self._log('info', "Cleared 'Final Grade Received Date' field.")
+                            except Exception:
+                                pass
+
+                        # Submit modal changes
+                        modal_submit_xpath = config.get("update_xpath") or config.get("submit_xpath")
+                        if not modal_submit_xpath:
+                            raise Exception("Neither 'update_xpath' nor 'submit_xpath' defined in credentials for modal submission.")
+
+                        safe_click(driver, wait, modal_submit_xpath, "Update/Submit button", log_func=self._log)
+                        self._log('info', f"Successfully un-submitted grade for Student ID {student_id}.")
+
+                        self._log_csv_status(csv_path, student_id, link, "SUCCESS",
+                                             "Un-submitted grade (Final Grade Received marked 'No').")
+                        return
+
+                    # ==============================================================
+                    # SUBMIT GRADE WORKFLOW (Standard)
+                    # ==============================================================
                     # --- enrollmentDate (optional) ---
                     if enrollment_date_val and config.get("enrollment_date_xpath"):
                         safe_send_keys(driver, wait, config["enrollment_date_xpath"], enrollment_date_val,
@@ -292,49 +753,309 @@ class GradeSubmitter:
                                          f"Updated grade ('{grade_val}') and score ('{score_val}') successfully.")
 
                 row_ok, _, row_err = process_item_with_retry(
-                    student_id, _process_student, MODULE_ID,
+                    student_id, _process_student, active_module_id,
                     log_func=self._log, abort_flag=self._abort, track_session=False,
                 )
+                if not row_ok and (
+                    isinstance(row_err, (BrowserSessionError, TimeoutException))
+                    or is_dead_session_error(row_err)
+                    or (row_err is not None and is_portal_session_expired(driver))
+                ):
+                    if not self._abort():
+                        if _restart_driver():
+                            self._log('info', f"[RECOVERY] Retrying student {student_id} with restored browser session...")
+                            row_ok, _, row_err = process_item_with_retry(
+                                student_id, _process_student, active_module_id,
+                                log_func=self._log, abort_flag=self._abort, track_session=False,
+                            )
+                        else:
+                            self._log('error', "[RECOVERY] Unable to restore browser session. Stopping worker.")
+                            self._log_csv_status(target_csv, student_id, link, "FAILED", "Browser session died and could not be recovered")
+                            remove_grade_item_completed(target_csv, student_id, link, mode=mode)
+                            SessionManager.update_item_status(active_module_id, item_key, success=False)
+                            break
+
                 if row_ok:
                     success_count += 1
-                    SessionManager.update_item_status(MODULE_ID, student_id, success=True)
+                    mark_grade_item_completed(target_csv, student_id, link, mode=mode)
+                    SessionManager.update_item_status(active_module_id, item_key, success=True)
                 else:
                     self._log('error', f"ERROR: Failed processing Student ID {student_id} after retries: {row_err}")
-                    self._log_csv_status(csv_path, student_id, link, "FAILED", str(row_err))
-                    SessionManager.update_item_status(MODULE_ID, student_id, success=False)
+                    self._log_csv_status(target_csv, student_id, link, "FAILED", str(row_err))
+                    remove_grade_item_completed(target_csv, student_id, link, mode=mode)
+                    SessionManager.update_item_status(active_module_id, item_key, success=False)
 
                 completed_count += 1
                 self._on_progress({
                     'type': 'item_done',
                     'completed': completed_count,
                     'students_traversed': completed_count,
-                    'total_students': total_count
+                    'total_students': total_count,
+                    'total': total_count,
+                    'student_id': student_id,
+                    'success': row_ok,
                 })
             else:
                 # for/else: loop finished without a break (no abort) — clear session.
-                SessionManager.clear_session(MODULE_ID)
+                SessionManager.clear_session(active_module_id)
                 self._log('info', "[SESSION] All rows processed — session cleared.")
 
         finally:
-            if driver:
-                driver.quit()
+            try:
+                safe_quit_driver(driver, log_func=lambda m: self._log('debug', m))
+            except Exception:
+                pass
+            driver = None
 
             # --- LEARNING: Record run summary ---
-            duration = time.time() - run_start
-            learning_engine.record_run_summary(
-                module_name="Grade Submission",
-                total_items=total_count,
-                success_count=success_count,
-                total_files=0,
-                duration_sec=duration,
-            )
-            self._log('info', f"[LEARNING] Run summary recorded. Duration: {duration:.1f}s, "
-                               f"Successes: {success_count}/{total_count}")
+            try:
+                duration = time.time() - run_start
+                learning_engine.record_run_summary(
+                    module_name="Un-submit Grades" if mode == "unsubmit" else "Grade Submission",
+                    total_items=total_count,
+                    success_count=success_count,
+                    total_files=0,
+                    duration_sec=duration,
+                )
+                self._log('info', f"[LEARNING] Run summary recorded. Duration: {duration:.1f}s, "
+                                   f"Successes: {success_count}/{total_count}")
 
-            # --- LEARNING: Record whether this DevTools setting worked, so future
-            # runs on this domain can auto-correct if the user forgets the checkbox. ---
-            if total_count:
-                learning_engine.record_devtools_outcome(domain_key, effective_devtools, success_count > 0)
+                # --- LEARNING: Record whether this DevTools setting worked ---
+                if total_count:
+                    learning_engine.record_devtools_outcome(domain_key, effective_devtools, success_count > 0)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Parallel execution
+    # ------------------------------------------------------------------
+
+    def run_parallel(
+        self,
+        config: dict,
+        csv_path: str,
+        n_workers: int,
+        devtools: bool = False,
+        on_progress=None,
+        abort_flag=None,
+        log=None,
+        session_inputs: dict | None = None,
+        mode: str = "submit",
+        skip_completed: bool = True,
+    ) -> None:
+        """Run grade submission with *n_workers* independent Chrome instances
+        working in parallel, each handling a separate chunk of the CSV.
+
+        Progress events from all workers are merged and forwarded through the
+        single *on_progress* / *log* callbacks supplied by the caller, so the
+        existing UI progress bar and KPI grid work without any changes.
+
+        Thread safety:
+          - Each worker owns its own ``GradeSubmitter`` instance and Selenium
+            driver, so there is no shared browser state.
+          - The shared execution-results CSV is protected by ``_csv_write_lock``.
+          - Session persistence uses per-worker module IDs
+            (``grade_submission_w0``, ``grade_submission_w1``, …) so workers
+            never clobber each other's progress checkpoints.
+          - The *abort_flag* is checked by every worker; setting it once stops
+            all of them at their next row boundary.
+        """
+        _log  = log          or (lambda l, m: None)
+        _prog = on_progress  or (lambda d: None)
+        _abort = abort_flag  or (lambda: False)
+
+        n_workers = max(1, n_workers)
+        run_start = time.time()
+
+        # ── Load and partition the DataFrame ────────────────────────────────
+        df_full = pd.read_csv(csv_path)
+        total_count = len(df_full)
+
+        if total_count == 0:
+            _log('warning', "CSV is empty — nothing to process.")
+            return
+
+        # Identify student and link columns
+        student_col = None
+        for col in df_full.columns:
+            clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+            if clean_c in ("studentid", "id", "student"):
+                student_col = col
+                break
+        if not student_col:
+            student_col = "studentId" if "studentId" in df_full.columns else df_full.columns[0]
+
+        link_col = None
+        for col in df_full.columns:
+            clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+            if clean_c in ("link", "url", "studentlink"):
+                link_col = col
+                break
+        if not link_col:
+            link_col = "link" if "link" in df_full.columns else (df_full.columns[1] if len(df_full.columns) > 1 else df_full.columns[0])
+
+        already_completed_count = 0
+        df_pending = df_full
+
+        if skip_completed:
+            completed_keys = get_completed_grade_items(csv_path, mode=mode, log_func=_log)
+            if completed_keys:
+                def _row_is_done(r):
+                    sid = str(r[student_col]).strip()
+                    lnk = str(r[link_col]).strip().rstrip("/")
+                    k = make_submission_key(sid, lnk)
+                    return k in completed_keys or (not lnk and sid in completed_keys)
+
+                mask_done = df_full.apply(_row_is_done, axis=1)
+                already_completed_count = int(mask_done.sum())
+
+                if already_completed_count >= total_count:
+                    _log('info', f"[SESSION] All {total_count} rows in this CSV have already been successfully submitted! Nothing to process.")
+                    _prog({'type': 'total', 'total': total_count})
+                    _prog({
+                        'type': 'item_done',
+                        'completed': total_count,
+                        'students_traversed': total_count,
+                        'total_students': total_count,
+                        'total': total_count,
+                        'success': True,
+                        'skipped': True,
+                    })
+                    return
+
+                if already_completed_count > 0:
+                    df_pending = df_full[~mask_done].reset_index(drop=True)
+                    _log('info', f"[SESSION] Found {already_completed_count} of {total_count} rows already submitted in prior runs. "
+                                 f"Skipping them and distributing remaining {len(df_pending)} unsubmitted rows across workers...")
+
+        pending_count = len(df_pending)
+        n_workers = min(n_workers, pending_count)
+        chunk_size = math.ceil(pending_count / n_workers)
+        chunks = [
+            df_pending.iloc[i : i + chunk_size].reset_index(drop=True)
+            for i in range(0, pending_count, chunk_size)
+        ]
+        actual_workers = len(chunks)
+
+        _log('info',
+             f"[PARALLEL] Starting {actual_workers} worker(s) — "
+             f"{pending_count} pending rows split into chunks of ~{chunk_size} (Total CSV: {total_count}).")
+        _prog({'type': 'total', 'total': total_count})
+        if already_completed_count > 0:
+            _prog({
+                'type': 'item_done',
+                'completed': already_completed_count,
+                'students_traversed': already_completed_count,
+                'total_students': total_count,
+                'total': total_count,
+                'success': True,
+                'skipped': True,
+            })
+
+        # ── Shared counters (protected by a lock) ───────────────────────────
+        _counter_lock = threading.Lock()
+        _shared = {'completed': already_completed_count, 'success': already_completed_count}
+
+        # Shared run_id so all workers append to the same results file
+        shared_run_id = new_run_id()
+
+        def _worker(worker_idx: int, chunk_df: pd.DataFrame):
+            """Target function for each worker thread."""
+            worker_module_id = f"{MODULE_ID}_w{worker_idx}"
+            submitter = GradeSubmitter()
+            submitter._run_id = shared_run_id   # point all workers at same log
+            submitter._csv_lock = _csv_write_lock  # shared write lock
+
+            def worker_log(lvl, msg):
+                _log(lvl, f"[W{worker_idx}] {msg}")
+
+            def worker_progress(data: dict):
+                p_type = data.get('type')
+                if p_type == 'item_done':
+                    with _counter_lock:
+                        _shared['completed'] += 1
+                        _shared['success'] += int(data.get('success', 1))
+                        merged = dict(data)
+                        merged['completed'] = _shared['completed']
+                        merged['students_traversed'] = _shared['completed']
+                        merged['total_students'] = total_count
+                        merged['total'] = total_count
+                    _prog(merged)
+                elif p_type == 'item_start':
+                    merged = dict(data)
+                    with _counter_lock:
+                        merged['students_traversed'] = _shared['completed']
+                        merged['total_students'] = total_count
+                        merged['total'] = total_count
+                    _prog(merged)
+                else:
+                    _prog(data)
+
+            # Write a temp CSV for this worker's chunk so run() can read it
+            chunk_csv = csv_path.replace('.csv', f'_chunk_w{worker_idx}_{shared_run_id}.csv')
+            try:
+                chunk_df.to_csv(chunk_csv, index=False)
+                submitter.run(
+                    config=config,
+                    csv_path=chunk_csv,
+                    devtools=devtools,
+                    on_progress=worker_progress,
+                    abort_flag=_abort,
+                    log=worker_log,
+                    session_inputs=session_inputs,
+                    mode=mode,
+                    skip_completed=False,  # Already pre-filtered to pending rows
+                    canonical_csv_path=csv_path,
+                    _module_id_override=worker_module_id,
+                )
+            except Exception as w_err:
+                worker_log('error', f"Worker encountered an unhandled error: {w_err}")
+            finally:
+                # Clean up the temp chunk CSV
+                try:
+                    if os.path.isfile(chunk_csv):
+                        os.remove(chunk_csv)
+                except Exception:
+                    pass
+
+        # ── Launch and join all worker threads ──────────────────────────────
+        threads = [
+            threading.Thread(
+                target=_worker,
+                args=(idx, chunk),
+                name=f"GradeWorker-{idx}",
+                daemon=True,
+            )
+            for idx, chunk in enumerate(chunks)
+        ]
+
+        for idx, t in enumerate(threads):
+            if _abort():
+                break
+            t.start()
+            if idx < len(threads) - 1:
+                # Stagger worker launches to prevent OS process spawn storm,
+                # port thrashing, and simultaneous DNS flood on initial logins.
+                time.sleep(0.4)
+
+        for t in threads:
+            t.join()
+
+        duration = time.time() - run_start
+        total_success = _shared['success']
+        _log('info',
+             f"[PARALLEL] All {actual_workers} worker(s) finished. "
+             f"Duration: {duration:.1f}s | "
+             f"Success: {total_success}/{total_count}")
+
+        # Record combined run summary in the learning system
+        learning_engine.record_run_summary(
+            module_name="Un-submit Grades (Parallel)" if mode == "unsubmit" else "Grade Submission (Parallel)",
+            total_items=total_count,
+            success_count=total_success,
+            total_files=0,
+            duration_sec=duration,
+        )
 
     def verify_logs(self, csv_path: str, log=None) -> dict:
         _log = log or (lambda l, m: None)
@@ -350,7 +1071,16 @@ class GradeSubmitter:
             df_input = pd.read_csv(csv_path)
             df_logs  = pd.read_csv(csv_log_file)
 
-            df_input["studentId"] = df_input["studentId"].astype(str).str.strip()
+            student_col = None
+            for col in df_input.columns:
+                clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+                if clean_c in ("studentid", "id", "student"):
+                    student_col = col
+                    break
+            if not student_col:
+                student_col = "studentId" if "studentId" in df_input.columns else df_input.columns[0]
+
+            df_input["studentId"] = df_input[student_col].astype(str).str.strip()
             df_logs["StudentId"]  = df_logs["StudentId"].astype(str).str.strip()
 
             processed_ids = set(df_logs[df_logs["Status"] == "SUCCESS"]["StudentId"])
@@ -386,9 +1116,15 @@ class GradeSubmitter:
                 select_elem.select_by_visible_text(config["role"])
 
             login_url_before = driver.current_url
-            safe_click(driver, wait, btn_xpath, "Login button", log_func=self._log)
             try:
-                WebDriverWait(driver, 8).until(lambda d: d.current_url != login_url_before)
+                safe_click(driver, wait, btn_xpath, "Login button", log_func=self._log)
+            except TimeoutException:
+                try:
+                    driver.execute_script("window.stop();")
+                except Exception:
+                    pass
+            try:
+                WebDriverWait(driver, 10).until(lambda d: d.current_url != login_url_before)
             except TimeoutException:
                 pass
 
@@ -448,15 +1184,34 @@ class GradeSubmitter:
         )
 
     def _log_csv_status(self, csv_path: str, student_id: str, link: str, status: str, details: str):
+        """Append a result row to the per-run timestamped CSV and update the
+        cumulative master ``execution_results.csv`` in the same directory.
+
+        The master CSV always reflects the *latest* status for each
+        (StudentId, Link) pair across all runs, so retried rows get updated
+        in-place rather than duplicated.
+        """
+        # Use the original (non-chunk) base dir when running as a parallel worker
         base_dir = os.path.dirname(csv_path)
         run_id = getattr(self, '_run_id', None) or new_run_id()
         csv_log_file = os.path.join(base_dir, f"execution_results_{run_id}.csv")
-        file_exists = os.path.isfile(csv_log_file)
+        master_log_file = os.path.join(base_dir, "execution_results.csv")
+        # Use per-instance lock if set by parallel coordinator, else the global lock
+        lock = getattr(self, '_csv_lock', _csv_write_lock)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = [ts, student_id, link, status, details]
+        header = ["Timestamp", "StudentId", "Link", "Status", "Details"]
         try:
-            with open(csv_log_file, "a", newline="") as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(["Timestamp", "StudentId", "Link", "Status", "Details"])
-                writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), student_id, link, status, details])
+            with lock:
+                # 1. Per-run timestamped log (append-only)
+                file_exists = os.path.isfile(csv_log_file)
+                with open(csv_log_file, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    if not file_exists:
+                        writer.writerow(header)
+                    writer.writerow(row)
+
+                # 2. Cumulative master log (upsert by StudentId + Link)
+                _update_master_csv(master_log_file, header, student_id, link, row)
         except Exception as e:
             self._log('error', f"Error appending to CSV log: {e}")

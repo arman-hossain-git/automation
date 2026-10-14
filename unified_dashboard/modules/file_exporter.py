@@ -42,6 +42,8 @@ import os
 import re
 import csv
 import time
+import math
+import threading
 import base64
 import hashlib
 import logging
@@ -53,7 +55,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from core.chrome_driver import launch_chrome_driver, build_download_options
+from core.chrome_driver import launch_chrome_driver, build_download_options, safe_quit_driver
 from core.settings_manager import settings
 from core.selenium_helpers import (
     set_download_behavior,
@@ -215,6 +217,7 @@ class FileExporter:
         abort_flag=None,
         log=None,
         session_inputs: dict | None = None,
+        _module_id_override: str | None = None,
     ) -> None:
         self._log = log or (lambda l, m: None)
         self._on_progress = on_progress or (lambda d: None)
@@ -224,7 +227,7 @@ class FileExporter:
         # Per-run identifier baked into this run's log filenames (debug .log
         # and execution .csv) so consecutive runs never append into the same
         # file and stay easy to tell apart in a folder listing.
-        self._run_id = new_run_id()
+        self._run_id = getattr(self, '_run_id', None) or new_run_id()
         success_count = 0
         total_files_downloaded = 0
         domain_key = None
@@ -233,6 +236,8 @@ class FileExporter:
         students = filter_valid_students(students)
         download_dir_abs = os.path.abspath(download_dir)
         os.makedirs(download_dir_abs, exist_ok=True)
+
+        active_module_id = _module_id_override or MODULE_ID
 
         # --- SESSION PERSISTENCE: resume-aware run tracking ---
         # session_inputs identifies this exact run (credentials/CSV/download dir/etc).
@@ -244,7 +249,7 @@ class FileExporter:
             'login_url': config.get('login_url', ''),
             'folder_hierarchy_template': folder_hierarchy_template,
         }
-        session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=len(students))
+        session_data = SessionManager.start_session(active_module_id, session_inputs, total_items=len(students))
         completed_ids = set(session_data.get('completed_item_ids', []))
 
         self._setup_file_logger(download_dir_abs)
@@ -326,7 +331,7 @@ class FileExporter:
                     wait_for_page_ready(driver, timeout=15)
 
                 nav_ok, _, nav_err = process_item_with_retry(
-                    student_id, _do_nav, MODULE_ID,
+                    student_id, _do_nav, active_module_id,
                     log_func=self._log, abort_flag=self._abort, track_session=False,
                 )
                 if not nav_ok:
@@ -335,7 +340,7 @@ class FileExporter:
                         break
                     self._log('error', f"Could not load {student_id}'s page after retries: {nav_err} -- skipping.")
                     learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
-                    SessionManager.update_item_status(MODULE_ID, student_id, success=False)
+                    SessionManager.update_item_status(active_module_id, student_id, success=False)
                     self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
                     continue
 
@@ -359,7 +364,7 @@ class FileExporter:
                                 'actionComment': 'Session kept expiring / re-login failed for this record',
                                 'validation': 'traversed',
                             }])
-                            SessionManager.update_item_status(MODULE_ID, student_id, success=False)
+                            SessionManager.update_item_status(active_module_id, student_id, success=False)
                             self._on_progress({
                                 'type': 'student_done',
                                 'students_traversed': idx + 1,
@@ -368,7 +373,7 @@ class FileExporter:
                             continue
                     except Exception as relogin_err:
                         self._log('error', f"Re-login failed for {student_id}: {relogin_err}")
-                        SessionManager.update_item_status(MODULE_ID, student_id, success=False)
+                        SessionManager.update_item_status(active_module_id, student_id, success=False)
                         continue
 
                 learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
@@ -437,7 +442,7 @@ class FileExporter:
 
                 # Mark this student as successfully processed in the session
                 # so a subsequent resume skips them correctly.
-                SessionManager.update_item_status(MODULE_ID, student_id, success=True)
+                SessionManager.update_item_status(active_module_id, student_id, success=True)
 
                 self._on_progress({
                     'type': 'student_done',
@@ -449,12 +454,15 @@ class FileExporter:
                 # (no abort, no browser crash) -- clear the session so the
                 # next launch starts fresh instead of resuming.
                 loop_completed = True
-                SessionManager.clear_session(MODULE_ID)
+                SessionManager.clear_session(active_module_id)
                 self._log('info', "[SESSION] All records processed — session cleared.")
 
         finally:
-            if driver:
-                driver.quit()
+            try:
+                safe_quit_driver(driver, log_func=lambda m: self._log('debug', m))
+            except Exception:
+                pass
+            driver = None
             from core.utils import remove_empty_dirs
             remove_empty_dirs(download_dir_abs)
 
@@ -472,20 +480,238 @@ class FileExporter:
                 learning_engine.record_devtools_outcome(domain_key, effective_devtools, success_count > 0)
 
     # ------------------------------------------------------------------ #
+    # Parallel execution
+    # ------------------------------------------------------------------ #
+
+    def run_parallel(
+        self,
+        config: dict,
+        students: list,
+        download_dir: str,
+        n_workers: int,
+        folder_hierarchy_template: str = "{studentId}/{segment}/{category}",
+        allow_duplicates: bool = True,
+        segment_names_str: str = "",
+        default_segment: str = "Uncategorized",
+        category_column_index: int = 2,
+        filters: dict | None = None,
+        devtools: bool = False,
+        on_progress=None,
+        abort_flag=None,
+        log=None,
+        session_inputs: dict | None = None,
+    ) -> None:
+        """Run file exporter with *n_workers* independent Chrome instances
+        working in parallel, each handling a separate slice of students.
+
+        Progress events from all workers are merged and forwarded through the
+        single *on_progress* / *log* callbacks supplied by the caller, so the
+        existing UI progress bar and KPI grid work smoothly.
+        """
+        _log = log or (lambda l, m: None)
+        _prog = on_progress or (lambda d: None)
+        _abort = abort_flag or (lambda: False)
+
+        n_workers = max(1, n_workers)
+        run_start = time.time()
+
+        students = filter_valid_students(students)
+        total_count = len(students)
+        if total_count == 0:
+            _log('warning', "No valid student records to export.")
+            return
+
+        download_dir_abs = os.path.abspath(download_dir)
+        os.makedirs(download_dir_abs, exist_ok=True)
+
+        session_inputs = session_inputs or {
+            'download_dir': download_dir,
+            'login_url': config.get('login_url', ''),
+            'folder_hierarchy_template': folder_hierarchy_template,
+        }
+        session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=total_count)
+        completed_ids = SessionManager.get_all_completed_item_ids(MODULE_ID)
+
+        already_completed_count = 0
+        df_pending = students
+
+        if completed_ids:
+            df_pending = [s for s in students if s['studentId'] not in completed_ids]
+            already_completed_count = total_count - len(df_pending)
+
+            if already_completed_count >= total_count:
+                _log('info', f"[SESSION] All {total_count} records have already been successfully processed! Nothing to export.")
+                _prog({'type': 'total', 'total': total_count})
+                _prog({
+                    'type': 'student_done',
+                    'completed': total_count,
+                    'students_traversed': total_count,
+                    'total_students': total_count,
+                    'total': total_count,
+                    'success': True,
+                    'skipped': True,
+                })
+                return
+
+            if already_completed_count > 0:
+                _log('info', f"[SESSION] Found {already_completed_count} of {total_count} records already completed in prior runs. "
+                             f"Skipping them and distributing remaining {len(df_pending)} records across workers...")
+
+        pending_count = len(df_pending)
+        n_workers = min(n_workers, pending_count)
+        chunk_size = math.ceil(pending_count / n_workers)
+        chunks = [
+            df_pending[i : i + chunk_size]
+            for i in range(0, pending_count, chunk_size)
+        ]
+        actual_workers = len(chunks)
+
+        _log('info',
+             f"[PARALLEL] Starting {actual_workers} worker(s) — "
+             f"{pending_count} pending records split into chunks of ~{chunk_size} (Total: {total_count}).")
+        _prog({'type': 'total', 'total': total_count})
+        if already_completed_count > 0:
+            _prog({
+                'type': 'student_done',
+                'completed': already_completed_count,
+                'students_traversed': already_completed_count,
+                'total_students': total_count,
+                'total': total_count,
+                'success': True,
+                'skipped': True,
+            })
+
+        _counter_lock = threading.Lock()
+        _csv_write_lock = threading.Lock()
+        _shared = {
+            'completed': already_completed_count,
+            'success': already_completed_count,
+            'files_done': 0,
+        }
+        shared_run_id = new_run_id()
+
+        def _worker(worker_idx: int, chunk_students: list):
+            worker_module_id = f"{MODULE_ID}_w{worker_idx}"
+            exporter = FileExporter()
+            exporter._run_id = shared_run_id
+            exporter._csv_lock = _csv_write_lock
+
+            def worker_log(lvl, msg):
+                _log(lvl, f"[W{worker_idx}] {msg}")
+
+            def worker_progress(data: dict):
+                p_type = data.get('type')
+                if p_type == 'student_done':
+                    with _counter_lock:
+                        _shared['completed'] += 1
+                        _shared['success'] += 1
+                        merged = dict(data)
+                        merged['completed'] = _shared['completed']
+                        merged['students_traversed'] = _shared['completed']
+                        merged['total_students'] = total_count
+                        merged['total'] = total_count
+                    _prog(merged)
+                elif p_type == 'file_done':
+                    with _counter_lock:
+                        _shared['files_done'] += 1
+                        merged = dict(data)
+                        merged['files_done'] = _shared['files_done']
+                    _prog(merged)
+                elif p_type == 'student_start':
+                    merged = dict(data)
+                    with _counter_lock:
+                        merged['students_traversed'] = _shared['completed']
+                        merged['total_students'] = total_count
+                        merged['total'] = total_count
+                    _prog(merged)
+                elif p_type in ('total', 'files_total'):
+                    pass
+                else:
+                    _prog(data)
+
+            try:
+                exporter.run(
+                    config=config,
+                    students=chunk_students,
+                    download_dir=download_dir,
+                    folder_hierarchy_template=folder_hierarchy_template,
+                    allow_duplicates=allow_duplicates,
+                    segment_names_str=segment_names_str,
+                    default_segment=default_segment,
+                    category_column_index=category_column_index,
+                    filters=filters,
+                    devtools=devtools,
+                    on_progress=worker_progress,
+                    abort_flag=_abort,
+                    log=worker_log,
+                    session_inputs=session_inputs,
+                    _module_id_override=worker_module_id,
+                )
+            except Exception as w_err:
+                worker_log('error', f"Worker encountered an unhandled error: {w_err}")
+
+        threads = [
+            threading.Thread(
+                target=_worker,
+                args=(idx, chunk),
+                name=f"ExporterWorker-{idx}",
+                daemon=True,
+            )
+            for idx, chunk in enumerate(chunks)
+        ]
+
+        for idx, t in enumerate(threads):
+            if _abort():
+                break
+            t.start()
+            if idx < len(threads) - 1:
+                time.sleep(0.4)
+
+        for t in threads:
+            t.join()
+
+        from core.utils import remove_empty_dirs
+        remove_empty_dirs(download_dir_abs)
+
+        duration = time.time() - run_start
+        total_success = _shared['success']
+        total_files = _shared['files_done']
+
+        if not _abort() and total_success >= total_count:
+            SessionManager.clear_session(MODULE_ID)
+            for idx in range(actual_workers):
+                SessionManager.clear_session(f"{MODULE_ID}_w{idx}")
+            _log('info', "[SESSION] All records processed in parallel — session cleared.")
+
+        _log('info',
+             f"[PARALLEL] All {actual_workers} worker(s) finished. "
+             f"Duration: {duration:.1f}s | "
+             f"Success: {total_success}/{total_count} records | "
+             f"Files: {total_files}")
+
+        learning_engine.record_run_summary(
+            module_name="File Exporter (Parallel)",
+            total_items=total_count,
+            success_count=total_success,
+            total_files=total_files,
+            duration_sec=duration,
+        )
+
+    # ------------------------------------------------------------------ #
     # File logger
     # ------------------------------------------------------------------ #
 
     def _setup_file_logger(self, download_dir_abs: str):
         run_id = getattr(self, '_run_id', None) or new_run_id()
         log_path = os.path.join(download_dir_abs, f"automation_debug_{run_id}.log")
-        file_logger = logging.getLogger("file_exporter_debug")
+        file_logger = logging.getLogger(f"file_exporter_debug_{run_id}")
         file_logger.setLevel(logging.DEBUG)
-        file_logger.handlers.clear()
-        fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
-        file_logger.addHandler(fh)
+        if not file_logger.handlers:
+            fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+            file_logger.addHandler(fh)
         self._file_logger = file_logger
         original_log = self._log
         def dual_log(level, msg):
@@ -1356,6 +1582,7 @@ class FileExporter:
         seen_names: dict = {}
         files_done = 0
         batch_logs = []
+        self._on_progress({'type': 'files_total', 'total': len(buttons), 'student_files': len(buttons)})
 
         for btn in buttons:
             if self._abort():
@@ -1399,7 +1626,12 @@ class FileExporter:
                 'directory': category_folder, 'action': status, 'actionComment': comment,
                 'validation': 'verified' if download_ok else result,
             })
-            self._on_progress({'type': 'file_done', 'files_done': files_done})
+            self._on_progress({
+                'type': 'file_done',
+                'files_done': files_done,
+                'student_files_done': files_done,
+                'student_files_total': len(buttons),
+            })
 
         if batch_logs:
             self._write_log_csv(download_dir_abs, batch_logs)
@@ -1411,7 +1643,7 @@ class FileExporter:
         download_dir_abs, allow_duplicates, filters, main_window, page_url
     ) -> int:
         items = self._collect_all_items(driver, wait, config, filters, page_url)
-        self._on_progress({'type': 'files_total', 'total': len(items)})
+        self._on_progress({'type': 'files_total', 'total': len(items), 'student_files': len(items)})
 
         if not items:
             self._log('warning', f"No files found on static page for {student_id}.")
@@ -1469,7 +1701,12 @@ class FileExporter:
                 'directory': category_folder, 'action': status, 'actionComment': comment,
                 'validation': 'verified' if download_ok else result,
             })
-            self._on_progress({'type': 'file_done', 'files_done': files_done})
+            self._on_progress({
+                'type': 'file_done',
+                'files_done': files_done,
+                'student_files_done': files_done,
+                'student_files_total': len(items),
+            })
 
         if batch_logs:
             self._write_log_csv(download_dir_abs, batch_logs)
@@ -1903,7 +2140,7 @@ class FileExporter:
 
         total_files = sum(len(s['files']) for s in sections)
         self._log('info', f"Found {len(sections)} section(s), {total_files} file(s) for {student_id}.")
-        self._on_progress({'type': 'files_total', 'total': total_files})
+        self._on_progress({'type': 'files_total', 'total': total_files, 'student_files': total_files})
 
         # Record the section structure for learning
         section_names = [s['name'] for s in sections]
@@ -1968,7 +2205,12 @@ class FileExporter:
                     'actionComment': comment,
                     'validation':    'verified' if download_ok else result,
                 })
-                self._on_progress({'type': 'file_done', 'files_done': files_done})
+                self._on_progress({
+                    'type': 'file_done',
+                    'files_done': files_done,
+                    'student_files_done': files_done,
+                    'student_files_total': total_files,
+                })
 
         if batch_logs:
             self._write_log_csv(download_dir_abs, batch_logs)
@@ -3005,7 +3247,7 @@ class FileExporter:
 
         first_pass_buttons = self._get_generate_buttons(driver, config)
         total_est = len(programs) * max(len(first_pass_buttons), 1)
-        self._on_progress({'type': 'files_total', 'total': total_est})
+        self._on_progress({'type': 'files_total', 'total': total_est, 'student_files': total_est})
 
         files_done = 0
         batch_logs = []
@@ -3052,7 +3294,12 @@ class FileExporter:
                     else:
                         self._log('warning', f"'{doc_label}' unavailable for {student_id}: {comment}.")
 
-                    self._on_progress({'type': 'file_done', 'files_done': files_done})
+                    self._on_progress({
+                        'type': 'file_done',
+                        'files_done': files_done,
+                        'student_files_done': files_done,
+                        'student_files_total': total_est,
+                    })
                     status_map = {'downloaded': 'downloaded', 'duplicate': 'downloaded', 'failed': 'failed'}
                     action_status = status_map.get(result, 'failed')
                     batch_logs.append({
@@ -3082,14 +3329,24 @@ class FileExporter:
     def _write_log_csv(self, download_dir: str, log_data: list) -> None:
         run_id = getattr(self, '_run_id', None) or new_run_id()
         log_file_path = os.path.join(download_dir, f"automation_execution_log_{run_id}.csv")
-        file_exists = os.path.isfile(log_file_path)
         headers = ['studentId', 'fileName', 'fileType', 'directory', 'action', 'actionComment', 'validation']
+        lock = getattr(self, '_csv_lock', None)
         try:
-            with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=headers)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerows(log_data)
+            if lock:
+                with lock:
+                    file_exists = os.path.isfile(log_file_path)
+                    with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
+                        writer = csv.DictWriter(f, fieldnames=headers)
+                        if not file_exists:
+                            writer.writeheader()
+                        writer.writerows(log_data)
+            else:
+                file_exists = os.path.isfile(log_file_path)
+                with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=headers)
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerows(log_data)
         except Exception as e:
             self._log('error', f"Failed writing log CSV: {e}")
 

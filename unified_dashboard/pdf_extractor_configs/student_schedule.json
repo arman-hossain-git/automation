@@ -3,6 +3,8 @@
   "record_separator": "Bayamon Community College",
   "output_columns": [
     "student_name",
+    "id",
+    "program",
     "program_description",
     "drop_date",
     "group",
@@ -24,6 +26,8 @@
     "days_of_week",
     "room",
     "class_time_start",
-    "class_time_end"
+    "class_time_end",
+    "source_file",
+    "page_number"
   ]
 }

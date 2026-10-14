@@ -57,6 +57,7 @@ class FileExporterUI(BaseToolFrame):
         # this at run time if a site has proven (from past runs) that it needs
         # DevTools even with this box unchecked.
         self.devtools_var        = tk.BooleanVar(value=settings.get("auto_open_devtools", False))
+        self.workers_var         = tk.IntVar(value=1)
 
         self.exporter = FileExporter()
         self._populate_inputs()
@@ -162,6 +163,16 @@ class FileExporterUI(BaseToolFrame):
             font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD, anchor="w", justify="left"
         ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(0, 4))
 
+        # Row 5: Parallel Workers
+        tk.Label(seg_group, text="Parallel Workers:", font=FONT_BODY_BOLD,
+                 fg=TEXT_PRIMARY, bg=BG_CARD).grid(row=5, column=0, sticky="w", padx=(0, 8), pady=3)
+        tk.Spinbox(seg_group, from_=1, to=50, width=6, textvariable=self.workers_var,
+                   bg="#2b2b2b", fg="#ffffff", buttonbackground="#3c3c3c", bd=1, relief="solid"
+                   ).grid(row=5, column=1, sticky="w", pady=3)
+        tk.Label(seg_group, text="(1 = sequential, 2–50 = parallel Chrome instances)",
+                 font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD
+                 ).grid(row=6, column=0, columnspan=4, sticky="w", pady=(0, 4))
+
         # ── 4. File Filters ────────────────────────────────────────────
         filt_group = tk.LabelFrame(
             ic, text=" 🔎 File Filters (Optional) ",
@@ -253,9 +264,11 @@ class FileExporterUI(BaseToolFrame):
         template = self.folder_template_var.get().strip() or "{studentId}/{segment}/{category}"
         seg_str = self.segment_names_var.get().strip()
 
+        n_workers = max(1, self.workers_var.get())
+        workers_tag = f" | {n_workers} workers" if n_workers > 1 else ""
         label = (
             f"Creds: {os.path.basename(self.cred_path)} | "
-            f"CSV: {os.path.basename(self.links_path)} ({len(students)} recs) | "
+            f"CSV: {os.path.basename(self.links_path)} ({len(students)} recs){workers_tag} | "
             f"Dir: {os.path.basename(self.download_dir)}"
         )
 
@@ -271,6 +284,7 @@ class FileExporterUI(BaseToolFrame):
             "devtools": self.devtools_var.get(),
             "cred_path": self.cred_path,
             "links_path": self.links_path,
+            "n_workers": n_workers,
         }
 
         import uuid
@@ -279,10 +293,11 @@ class FileExporterUI(BaseToolFrame):
     def run_single_task(self, task: QueueTask) -> bool:
         inputs = task.inputs
         self._log_dir = inputs["download_dir"]
-        self.log("info", f"Running File Exporter task: {task.label}")
+        n_workers = max(1, inputs.get("n_workers", 1))
+        self.log("info", f"Running File Exporter task ({'parallel ×' + str(n_workers) if n_workers > 1 else 'sequential'}): {task.label}")
 
         try:
-            self.exporter.run(
+            common_kwargs = dict(
                 config=inputs["config"],
                 students=inputs["students"],
                 download_dir=inputs["download_dir"],
@@ -296,6 +311,10 @@ class FileExporterUI(BaseToolFrame):
                 abort_flag=lambda: self.abort_requested,
                 log=self.log
             )
+            if n_workers > 1:
+                self.exporter.run_parallel(n_workers=n_workers, **common_kwargs)
+            else:
+                self.exporter.run(**common_kwargs)
             return not self.abort_requested
         except Exception as e:
             import traceback

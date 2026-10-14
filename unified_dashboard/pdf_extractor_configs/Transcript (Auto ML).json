@@ -1,0 +1,192 @@
+{
+  "record_separator": "Bayamon Community College Samo Marrero, Carmen R",
+  "exclude_patterns": [
+    "Page\\s+\\d+\\s+of\\s+\\d+",
+    "Powered by TCPDF.*",
+    "https?://\\S+",
+    "^\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}",
+    "^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),.*Page\\s+\\d+"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00c0-\\u00ff\\ufffd\\s'.-]+,\\s*[A-Za-z\\u00c0-\\u00ff\\ufffd\\s'.-]+)$",
+    "stop_at": ""
+  },
+  "address_block": null,
+  "repeating_sections": [],
+  "summary_fields": [
+    {
+      "name": "id",
+      "pattern": "ID:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "dob",
+      "pattern": "DOB:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "phone",
+      "pattern": "Phone:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "program_description",
+      "pattern": "Program\\ Description:(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "program_description_continuation",
+      "pattern": "Program\\ Description:[^\\n\\r]*\\r?\\n(?:[ \\t]*https?://\\S+[ \\t]*\\r?\\n)?(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}))[ \\t]*(?:https?://\\S+[ \\t]*)?([^\\n\\r]+)"
+    },
+    {
+      "name": "program_description_continuation2",
+      "pattern": "Program\\ Description:[^\\n\\r]*\\r?\\n(?:[ \\t]*https?://\\S+[ \\t]*\\r?\\n)?[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}))(?:https?://\\S+[ \\t]*)?[^\\n\\r]+\\r?\\n[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}|Official|\\$))([A-Za-z\\u00C0-\\u024F][^\\n\\r]{1,40})"
+    },
+    {
+      "name": "status",
+      "pattern": "Status:[ \\t]*(.+?)(?=[ \\t]+Exp\\ Grad\\ Date:|\\r?\\n|$)"
+    },
+    {
+      "name": "exp_grad_date",
+      "pattern": "Exp\\ Grad\\ Date:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "ft_pt",
+      "pattern": "FT/PT:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "first_term",
+      "pattern": "First\\ Term:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "lda",
+      "pattern": "LDA:[ \\t]*(.+?)(?=[ \\t]+Session:|\\r?\\n|$)"
+    },
+    {
+      "name": "session",
+      "pattern": "Session:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "first_term_continuation",
+      "pattern": "First\\ Term:[^\\n\\r]*\\r?\\n(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*([^\\n\\r]+)"
+    },
+    {
+      "name": "first_term_continuation2",
+      "pattern": "First\\ Term:[^\\n\\r]*\\r?\\n(?:[ \\t]*https?://\\S+[ \\t]*\\r?\\n)?[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}))(?:https?://\\S+[ \\t]*)?[^\\n\\r]+\\r?\\n[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}|Official|\\$))([A-Za-z\\u00C0-\\u024F][^\\n\\r]{1,40})"
+    },
+    {
+      "name": "term",
+      "pattern": "Term:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "term_continuation",
+      "pattern": "Term:[^\\n\\r]*\\r?\\n(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*([^\\n\\r]+)"
+    },
+    {
+      "name": "term_continuation2",
+      "pattern": "Term:[^\\n\\r]*\\r?\\n(?:[ \\t]*https?://\\S+[ \\t]*\\r?\\n)?[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}))(?:https?://\\S+[ \\t]*)?[^\\n\\r]+\\r?\\n[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}|Official|\\$))([A-Za-z\\u00C0-\\u024F][^\\n\\r]{1,40})"
+    },
+    {
+      "name": "total",
+      "pattern": "Total:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "cumulative_total",
+      "pattern": "Cumulative\\ Total:[ \\t]*(.+?)(?=\\r?\\n|$)"
+    },
+    {
+      "name": "cumulative_total_continuation",
+      "pattern": "Cumulative\\ Total:[^\\n\\r]*\\r?\\n(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*([^\\n\\r]+)"
+    },
+    {
+      "name": "cumulative_total_continuation2",
+      "pattern": "Cumulative\\ Total:[^\\n\\r]*\\r?\\n(?:[ \\t]*https?://\\S+[ \\t]*\\r?\\n)?[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}))(?:https?://\\S+[ \\t]*)?[^\\n\\r]+\\r?\\n[ \\t]*(?!(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date|\\d{2}/\\d{2}/\\d{4}|Official|\\$))([A-Za-z\\u00C0-\\u024F][^\\n\\r]{1,40})"
+    }
+  ],
+  "computed_fields": [
+    {
+      "name": "program",
+      "join": [
+        "program_description",
+        "program_description_continuation",
+        "program_description_continuation2"
+      ],
+      "sep": " "
+    },
+    {
+      "name": "first_term_full",
+      "join": [
+        "first_term",
+        "first_term_continuation",
+        "first_term_continuation2"
+      ],
+      "sep": " "
+    },
+    {
+      "name": "term_full",
+      "join": [
+        "term",
+        "term_continuation",
+        "term_continuation2"
+      ],
+      "sep": " "
+    },
+    {
+      "name": "cumulative_total_full",
+      "join": [
+        "cumulative_total",
+        "cumulative_total_continuation",
+        "cumulative_total_continuation2"
+      ],
+      "sep": " "
+    }
+  ],
+  "data_rows": {
+    "pattern": "^\\s*(\\S+)\\s+(.+?)\\s+([A-Za-z0-9\\-]+)\\s+([A-Za-z0-9\\-]+)\\s+([A-Za-z0-9\\-]+)\\s+([-]?\\$?\\s*[\\d,.]+)\\s*$",
+    "columns": [
+      "course",
+      "course_description",
+      "grade",
+      "attempted",
+      "completed",
+      "gpa"
+    ]
+  },
+  "output_columns": [
+    "student_name",
+    "id",
+    "dob",
+    "phone",
+    "program_description",
+    "program",
+    "program_description_continuation",
+    "program_description_continuation2",
+    "status",
+    "exp_grad_date",
+    "ft_pt",
+    "first_term",
+    "first_term_full",
+    "lda",
+    "session",
+    "first_term_continuation",
+    "first_term_continuation2",
+    "term",
+    "term_full",
+    "term_continuation",
+    "term_continuation2",
+    "total",
+    "cumulative_total",
+    "cumulative_total_full",
+    "cumulative_total_continuation",
+    "cumulative_total_continuation2",
+    "course",
+    "course_description",
+    "grade",
+    "attempted",
+    "completed",
+    "gpa"
+  ],
+  "ml_metadata": {
+    "synthesizer": "dbscan_spatial_ml",
+    "source_sample": "SamoMarrero_Carmen-BCC15717-Official Student Transcript_28545.pdf",
+    "detected_fields_count": 21,
+    "table_detected": true
+  }
+}

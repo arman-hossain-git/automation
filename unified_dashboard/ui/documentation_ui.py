@@ -161,6 +161,20 @@ studentId,link,finalGradeReceivedDate,score
 1001,https://pcr.example.com/StudentProfile.aspx?id=1001,2026-07-31,95
 1002,https://pcr.example.com/StudentProfile.aspx?id=1002,2026-07-31,A+
 1003,https://pcr.example.com/StudentProfile.aspx?id=1003,2026-07-31,88
+
+--------------------------------------------------------------------------------
+3. UN-SUBMIT GRADES CSV (for Un-submit Grades Module)
+--------------------------------------------------------------------------------
+Required Columns:
+  • student (or studentId, id): Student identification string/number
+  • link (or url):              Direct URL to student profile
+  Note: There are NO finalGradeReceivedDate, score, or grade columns needed!
+
+Example CSV Content:
+student,link
+1001,https://pcr.example.com/StudentProfile.aspx?id=1001
+1002,https://pcr.example.com/StudentProfile.aspx?id=1002
+1003,https://pcr.example.com/StudentProfile.aspx?id=1003
 """
 
 DIRECTORY_STRUCTURE_EXPLANATION = """\
@@ -246,17 +260,21 @@ How to Operate:
   5. The uploader creates required folders and uploads files asynchronously.
 
 --------------------------------------------------------------------------------
-MODULE 3: GRADE SUBMISSION (🎓)
+MODULE 3: GRADES (🎓)
 --------------------------------------------------------------------------------
-Purpose: Posts final grade status ('Yes'), grade received date, and final scores.
+Purpose: Provides two sub-features for student final grades management:
+  • Sub-feature 1: Submit Grades (posts 'Yes', grade received date, and scores).
+  • Sub-feature 2: Un-submit Grades (reverts status by marking 'No' and submitting).
 
 How to Operate:
-  1. Select Credentials file (.txt) and Grade Links CSV (.csv).
-  2. Verify CSV includes finalGradeReceivedDate and score columns.
-  3. Click '▶ Start Automation'.
-  4. The system navigates to each student profile, locates the record in Regular/
-     Waiting/Withdrawn lists, opens the Edit Status modal, sets Final Grade to 'Yes',
-     inputs the date, and posts score/grade via dynamic field detection.
+  1. Open the 'Grades' module from the sidebar.
+  2. Choose the active sub-feature:
+     - Click '🎓 Submit Grades' to enter grades, dates, and scores.
+       (CSV requires: studentId, link, finalGradeReceivedDate, score).
+     - Click '↩️ Un-submit Grades' to revert previously submitted grades.
+       (CSV requires only: student and link).
+  3. Select your Credentials (.txt) and Links CSV (.csv).
+  4. Click '▶ Start Automation'.
 """
 
 # ---------------------------------------------------------------------------

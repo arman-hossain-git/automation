@@ -17,15 +17,17 @@ Learning Integration:
 import os
 import csv
 import time
+import math
 import shutil
 import tempfile
 import datetime
+import threading
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 
-from core.chrome_driver import launch_chrome_driver, build_basic_options
+from core.chrome_driver import launch_chrome_driver, build_basic_options, safe_quit_driver
 from core.settings_manager import settings
 from core.selenium_helpers import (
     click_xpath,
@@ -118,6 +120,7 @@ class FileUploader:
         abort_flag=None,
         log=None,
         session_inputs: dict | None = None,
+        _module_id_override: str | None = None,
     ) -> None:
         self._log = log or (lambda l, m: None)
         self._on_progress = on_progress or (lambda d: None)
@@ -128,10 +131,12 @@ class FileUploader:
         # Per-run identifier baked into this run's execution log filename so
         # consecutive runs never append into the same file and stay easy to
         # tell apart in a folder listing.
-        self._run_id = new_run_id()
+        self._run_id = getattr(self, '_run_id', None) or new_run_id()
         total_uploaded = 0
         students_succeeded = 0
         loop_completed = False
+
+        active_module_id = _module_id_override or MODULE_ID
 
         # --- SESSION PERSISTENCE: resume-aware run tracking ---
         # session_inputs identifies this exact run (credentials/CSV/source dir/etc).
@@ -153,7 +158,7 @@ class FileUploader:
         if target_folder_name == NO_TARGET_FOLDER_LABEL:
             target_folder_name = ""
 
-        session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=len(students))
+        session_data = SessionManager.start_session(active_module_id, session_inputs, total_items=len(students))
         completed_ids = set(session_data.get('completed_item_ids', []))
         if completed_ids:
             self._log('info', f"[SESSION] Resuming previous session — "
@@ -211,6 +216,16 @@ class FileUploader:
                                 total_bytes_overall += os.path.getsize(fp)
                             except OSError:
                                 pass
+            if total_files_overall == 0 and os.path.isdir(source_dir):
+                cats = list_category_folders(source_dir)
+                for c in cats:
+                    for fn in c['files']:
+                        fp = os.path.join(c['path'], fn)
+                        try:
+                            total_files_overall += 1
+                            total_bytes_overall += os.path.getsize(fp)
+                        except OSError:
+                            pass
 
             bytes_done_overall = 0
             self._on_progress({
@@ -227,6 +242,8 @@ class FileUploader:
                 student_id = student['studentId']
                 link       = student['link']
                 student_root_folder = os.path.join(source_dir, student_id)
+                if not os.path.isdir(student_root_folder) and len(students) == 1 and list_category_folders(source_dir):
+                    student_root_folder = source_dir
 
                 if student_id in completed_ids:
                     self._log('info', f"[SESSION] Skipping student {student_id} — already completed in a previous run of this session.")
@@ -353,426 +370,515 @@ class FileUploader:
                                                      f"Folder '{category['name']}'", log_func=self._log)
                                 wait.until(EC.element_to_be_clickable(
                                     (By.XPATH, config['upload_tool_button_xpath'])))
-                                # Extra settle: PCR AJAX file listings render after the toolbar appears
-                                time.sleep(0.5)
+                                # Brief settle: navigation confirmation already waited; just let AJAX
+                                # file rows paint before the initial snapshot.
+                                time.sleep(0.25)
                                 category_listing_url = driver.current_url
 
-                            initial_snapshot = get_portal_table_snapshot(driver, config, wait_timeout=1.5)
-                        category_uploaded_tracker = []
-                        pending_files = []
-                        for file_name in category['files']:
-                            if self._abort():
-                                break
+                            initial_snapshot = get_portal_table_snapshot(driver, config, wait_timeout=0.5)
+                            category_uploaded_tracker = []
+                            pending_files = []
+                            for file_name in category['files']:
+                                if self._abort():
+                                    break
 
-                            src_path = os.path.join(category['path'], file_name)
-                            f_size = 0
-                            try:
-                                if os.path.isfile(src_path):
-                                    f_size = os.path.getsize(src_path)
-                            except OSError:
-                                pass
+                                src_path = os.path.join(category['path'], file_name)
+                                f_size = 0
+                                try:
+                                    if os.path.isfile(src_path):
+                                        f_size = os.path.getsize(src_path)
+                                except OSError:
+                                    pass
 
-                            file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
-                            if file_ext in config.get('unsupported_extensions_list', set()):
-                                self._log('info', f"Skipping '{file_name}' — '.{file_ext}' is configured as an unsupported format.")
-                                files_done += 1
-                                bytes_done_overall += f_size
-                                batch_logs.append({
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    '-',
-                                    'action':        'skipped_unsupported',
-                                    'actionComment': f"Unsupported file extension '.{file_ext}' (configured) -- not attempted, will not be retried.",
-                                    'validation':    'skipped',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                })
-                                self._on_progress({
-                                    'type': 'file_done',
-                                    'file_name': file_name,
-                                    'file_size': f_size,
-                                    'files_done': files_done,
-                                    'bytes_done': bytes_done_overall,
-                                    'total_bytes': total_bytes_overall,
-                                })
-                                continue
+                                file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
+                                if file_ext in config.get('unsupported_extensions_list', set()):
+                                    self._log('info', f"Skipping '{file_name}' — '.{file_ext}' is configured as an unsupported format.")
+                                    files_done += 1
+                                    bytes_done_overall += f_size
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    '-',
+                                        'action':        'skipped_unsupported',
+                                        'actionComment': f"Unsupported file extension '.{file_ext}' (configured) -- not attempted, will not be retried.",
+                                        'validation':    'skipped',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                    files_done += 1
+                                    self._on_progress({
+                                        'type': 'file_done',
+                                        'file_name': file_name,
+                                        'file_size': f_size,
+                                        'files_done': total_uploaded,
+                                        'files_total': total_files_overall,
+                                        'bytes_done': bytes_done_overall,
+                                        'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
+                                    })
+                                    continue
 
-                            is_ready, file_err = is_file_ready_for_upload(src_path)
-                            if not is_ready:
-                                self._log('warning', f"Skipping '{file_name}' — {file_err}.")
-                                files_done += 1
-                                bytes_done_overall += f_size
-                                batch_logs.append({
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    '-',
-                                    'action':        'failed',
-                                    'actionComment': f"Local file unready: {file_err}",
-                                    'validation':    '-',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                })
-                                self._on_progress({
-                                    'type': 'file_done',
-                                    'file_name': file_name,
-                                    'file_size': f_size,
-                                    'files_done': files_done,
-                                    'bytes_done': bytes_done_overall,
-                                    'total_bytes': total_bytes_overall,
-                                })
-                                continue
+                                is_ready, file_err = is_file_ready_for_upload(src_path)
+                                if not is_ready:
+                                    self._log('warning', f"Skipping '{file_name}' — {file_err}.")
+                                    files_done += 1
+                                    bytes_done_overall += f_size
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    '-',
+                                        'action':        'failed',
+                                        'actionComment': f"Local file unready: {file_err}",
+                                        'validation':    '-',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                    self._on_progress({
+                                        'type': 'file_done',
+                                        'file_name': file_name,
+                                        'file_size': f_size,
+                                        'files_done': total_uploaded,
+                                        'files_total': total_files_overall,
+                                        'bytes_done': bytes_done_overall,
+                                        'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
+                                    })
+                                    continue
 
-                            upload_name = sanitize_upload_filename(file_name)
+                                upload_name = sanitize_upload_filename(file_name)
 
-                            if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, table_snapshot=initial_snapshot, log_func=self._log):
-                                self._log('info', f"File '{file_name}' already exists in '{category['name']}' on portal (content verified) — skipping duplicate upload.")
-                                files_done += 1
-                                total_uploaded += 1
-                                bytes_done_overall += f_size
-                                batch_logs.append({
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    upload_name,
-                                    'action':        'uploaded',
-                                    'actionComment': 'Already exists on portal (duplicate prevented)',
-                                    'validation':    'already_uploaded',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                })
-                                self._on_progress({
-                                    'type': 'file_done',
-                                    'file_name': file_name,
-                                    'file_size': f_size,
-                                    'files_done': files_done,
-                                    'bytes_done': bytes_done_overall,
-                                    'total_bytes': total_bytes_overall,
-                                })
-                                continue
+                                if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, table_snapshot=initial_snapshot, log_func=self._log):
+                                    self._log('info', f"File '{file_name}' already exists in '{category['name']}' on portal (content verified) — skipping duplicate upload.")
+                                    files_done += 1
+                                    total_uploaded += 1
+                                    bytes_done_overall += f_size
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    upload_name,
+                                        'action':        'uploaded',
+                                        'actionComment': 'Already exists on portal (duplicate prevented)',
+                                        'validation':    'already_uploaded',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                    self._on_progress({
+                                        'type': 'file_done',
+                                        'file_name': file_name,
+                                        'file_size': f_size,
+                                        'files_done': total_uploaded,
+                                        'files_total': total_files_overall,
+                                        'bytes_done': bytes_done_overall,
+                                        'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
+                                    })
+                                    continue
 
-                            pending_files.append((file_name, upload_name, src_path))
+                                pending_files.append((file_name, upload_name, src_path))
 
-                        # --- BATCH MULTI-FILE UPLOAD ATTEMPT (if > 1 pending files exist) ---
-                        if len(pending_files) > 1 and not self._abort():
-                            self._log('info', f"Attempting batch multi-file upload for {len(pending_files)} files in folder '{category['name']}'...")
-                            batch_tmp_paths = []
-                            valid_batch_items = []
+                            # --- BATCH MULTI-FILE UPLOAD ATTEMPT (if > 1 pending files exist) ---
+                            if len(pending_files) > 1 and not self._abort():
+                                self._log('info', f"Attempting batch multi-file upload for {len(pending_files)} files in folder '{category['name']}'...")
+                                batch_tmp_paths = []
+                                valid_batch_items = []
+                                for file_name, upload_name, src_path in pending_files:
+                                    tmp_path = os.path.join(tmp_upload_dir, upload_name)
+                                    try:
+                                        shutil.copy2(src_path, tmp_path)
+                                        batch_tmp_paths.append(os.path.abspath(tmp_path))
+                                        valid_batch_items.append((file_name, upload_name, src_path))
+                                    except Exception as e:
+                                        self._log('error', f"Copy failed for batch file '{file_name}': {describe_exception(e)}")
+
+                                if len(batch_tmp_paths) > 1:
+                                    try:
+                                        click_xpath(driver, wait, config['upload_tool_button_xpath'],
+                                                    "Upload module button", log_func=self._log)
+                                        file_input = wait.until(EC.presence_of_element_located(
+                                            (By.XPATH, config['file_input_xpath'])))
+
+                                        set_file_input_files(driver, file_input, batch_tmp_paths, log_func=self._log)
+
+                                        dialogs_before_submit = get_dialog_signatures(driver)
+                                        click_xpath(driver, wait, config['upload_submit_xpath'],
+                                                    "Upload submit (batch)", log_func=self._log)
+
+                                        got_popup = try_click_xpath(driver, config['upload_popup_ok_xpath'],
+                                                                    "Upload confirmation OK", timeout=3,
+                                                                    log_func=self._log)
+                                        if not got_popup:
+                                            try:
+                                                wait.until(EC.element_to_be_clickable(
+                                                    (By.XPATH, config['upload_tool_button_xpath'])))
+                                            except Exception:
+                                                pass
+
+                                        # Batch upload submitted and confirmed successfully
+                                        for fn, un, sp in valid_batch_items:
+                                            files_done += 1
+                                            total_uploaded += 1
+                                            f_sz = 0
+                                            try:
+                                                if os.path.isfile(sp):
+                                                    f_sz = os.path.getsize(sp)
+                                            except OSError:
+                                                pass
+                                            bytes_done_overall += f_sz
+                                            self._log('info', f"Batch uploaded '{fn}' as '{un}'.")
+                                            log_entry = {
+                                                'studentId':     student_id,
+                                                'category':      category['name'],
+                                                'fileName':      fn,
+                                                'uploadedAs':    un,
+                                                'action':        'uploaded',
+                                                'actionComment': 'Success (batch upload)' if got_popup else 'Success (batch upload, no popup)',
+                                                'validation':    'pending',
+                                                'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                            }
+                                            batch_logs.append(log_entry)
+                                            category_uploaded_tracker.append({'fn': fn, 'un': un, 'sp': sp, 'log_dict': log_entry})
+                                            self._on_progress({
+                                                'type': 'file_done',
+                                                'file_name': fn,
+                                                'file_size': f_sz,
+                                                'files_done': total_uploaded,
+                                                'files_total': total_files_overall,
+                                                'bytes_done': bytes_done_overall,
+                                                'total_bytes': total_bytes_overall,
+                                                'student_files_done': files_done,
+                                                'student_files_total': total_files,
+                                            })
+
+                                        self._log('info', f"Batch upload complete! All {len(valid_batch_items)} files uploaded simultaneously.")
+                                        pending_files = []
+                                    except Exception as e:
+                                        self._log('info', f"Batch multi-file upload notice: {describe_exception(e)} — falling back to single-file upload sequence.")
+                                        pending_files = valid_batch_items
+
+                            # --- SEQUENTIAL SINGLE-FILE FALLBACK (for remaining pending files) ---
                             for file_name, upload_name, src_path in pending_files:
-                                tmp_path = os.path.join(tmp_upload_dir, upload_name)
-                                try:
-                                    shutil.copy2(src_path, tmp_path)
-                                    batch_tmp_paths.append(os.path.abspath(tmp_path))
-                                    valid_batch_items.append((file_name, upload_name, src_path))
-                                except Exception as e:
-                                    self._log('error', f"Copy failed for batch file '{file_name}': {describe_exception(e)}")
+                                if self._abort():
+                                    break
 
-                            if len(batch_tmp_paths) > 1:
+                                f_sz = 0
                                 try:
+                                    if os.path.isfile(src_path):
+                                        f_sz = os.path.getsize(src_path)
+                                except OSError:
+                                    pass
+
+                                self._on_progress({
+                                    'type': 'file_start',
+                                    'file_name': file_name,
+                                    'file_size': f_sz,
+                                    'student_id': student_id,
+                                })
+
+                                tmp_path = os.path.join(tmp_upload_dir, upload_name)
+                                if not os.path.exists(tmp_path):
+                                    try:
+                                        shutil.copy2(src_path, tmp_path)
+                                    except Exception as e:
+                                        self._log('error', f"Copy failed for '{file_name}': {describe_exception(e)}")
+                                        continue
+
+                                self._log('info', f"Uploading '{file_name}'...")
+
+                                def _do_upload():
+                                    # Check if already uploaded (e.g. from previous submit attempt before retry)
+                                    if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
+                                        self._log('info', f"File '{file_name}' detected in folder listing prior to submit — skipping duplicate submission.")
+                                        return True
+
                                     click_xpath(driver, wait, config['upload_tool_button_xpath'],
                                                 "Upload module button", log_func=self._log)
                                     file_input = wait.until(EC.presence_of_element_located(
                                         (By.XPATH, config['file_input_xpath'])))
-
-                                    set_file_input_files(driver, file_input, batch_tmp_paths, log_func=self._log)
+                                    set_file_input_files(driver, file_input, [tmp_path], log_func=self._log)
 
                                     dialogs_before_submit = get_dialog_signatures(driver)
                                     click_xpath(driver, wait, config['upload_submit_xpath'],
-                                                "Upload submit (batch)", log_func=self._log)
+                                                "Upload submit", log_func=self._log)
 
-                                    got_popup = try_click_xpath(driver, config['upload_popup_ok_xpath'],
-                                                                "Upload confirmation OK", timeout=3,
-                                                                log_func=self._log)
-                                    if not got_popup:
+                                    # --- FAST-PATH SUCCESS CHECK ---
+                                    # Poll for the upload-button becoming clickable again (success signal)
+                                    # OR for an error dialog/toast (failure signal) — whichever comes first.
+                                    # On the normal (success) path the button reappears in ~0.2-1.5 s;
+                                    # error dialogs appear at roughly the same speed.
+                                    # Running both checks in one loop instead of two serial 2-second waits
+                                    # saves ~4 s per successful file upload.
+                                    _upload_btn_xpath = config['upload_tool_button_xpath']
+                                    _popup_ok_xpath   = config.get('upload_popup_ok_xpath', '')
+                                    got_popup_inner   = False
+                                    _fast_path_done   = False
+                                    _fast_deadline    = time.time() + 8.0  # generous outer cap
+
+                                    while time.time() < _fast_deadline:
+                                        time.sleep(0.1)
+
+                                        # 1. Check: success popup appeared → click it
+                                        if _popup_ok_xpath:
+                                            try:
+                                                popup_els = driver.find_elements(By.XPATH, _popup_ok_xpath)
+                                                visible_popups = [p for p in popup_els if p.is_displayed()]
+                                                if visible_popups:
+                                                    try:
+                                                        visible_popups[0].click()
+                                                    except Exception:
+                                                        driver.execute_script("arguments[0].click();", visible_popups[0])
+                                                    got_popup_inner = True
+                                            except Exception:
+                                                pass
+
+                                        # 2. Check: malformed-file dialog (new, not pre-existing)
                                         try:
-                                            wait.until(EC.element_to_be_clickable(
-                                                (By.XPATH, config['upload_tool_button_xpath'])))
+                                            dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")
+                                            for d in dialogs:
+                                                try:
+                                                    rect = driver.execute_script(
+                                                        "var r=arguments[0].getBoundingClientRect();"
+                                                        "return {w:r.width,h:r.height};", d)
+                                                    if not rect or rect['w'] <= 0 or rect['h'] <= 0:
+                                                        continue
+                                                    sig = (d.get_attribute('aria-labelledby') or d.get_attribute('id') or '') + ':True'
+                                                    if sig in dialogs_before_submit:
+                                                        continue  # stale, pre-existing dialog
+                                                    text = (d.text or d.get_attribute('textContent') or '').lower()
+                                                    if 'malformed' in text and 'invalid file name' in text:
+                                                        malformed_full = (d.text or d.get_attribute('textContent') or 'Malformed or invalid file name').strip()
+                                                        ok_clicked = click_dialog_ok_button(driver, log_func=self._log)
+                                                        if not ok_clicked:
+                                                            dismiss_error_dialog(driver, log_func=self._log)
+                                                        wait.until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                        raise MalformedFileError(malformed_full)
+                                                except MalformedFileError:
+                                                    raise
+                                                except Exception:
+                                                    continue
+                                        except MalformedFileError:
+                                            raise
                                         except Exception:
                                             pass
 
-                                    # Batch upload submitted and confirmed successfully
-                                    for fn, un, sp in valid_batch_items:
-                                        files_done += 1
-                                        total_uploaded += 1
-                                        f_sz = 0
+                                        # 3. Check: unsupported-format toast (leaf-only)
                                         try:
-                                            if os.path.isfile(sp):
-                                                f_sz = os.path.getsize(sp)
-                                        except OSError:
+                                            _lower_fn = ("translate(normalize-space(.), "
+                                                         "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')")
+                                            _up_clause = (
+                                                f"contains({_lower_fn}, 'not supported') "
+                                                f"or contains({_lower_fn}, 'unsupported file') "
+                                                f"or contains({_lower_fn}, 'invalid file type') "
+                                                f"or contains({_lower_fn}, 'file type is not allowed') "
+                                                f"or contains({_lower_fn}, 'not a valid file')"
+                                            )
+                                            _up_els = driver.find_elements(
+                                                By.XPATH,
+                                                f"//*[({_up_clause}) and not(.//*[{_up_clause}])]"
+                                            )
+                                            _up_vis = [e for e in _up_els if e.is_displayed()]
+                                            if _up_vis:
+                                                unsupported_txt = (_up_vis[0].text or _up_vis[0].get_attribute('textContent') or 'Unsupported file type').strip()
+                                                dismiss_error_dialog(driver, log_func=self._log)
+                                                wait.until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                raise UnsupportedFormatError(unsupported_txt)
+                                        except (UnsupportedFormatError, MalformedFileError):
+                                            raise
+                                        except Exception:
                                             pass
-                                        bytes_done_overall += f_sz
-                                        self._log('info', f"Batch uploaded '{fn}' as '{un}'.")
-                                        log_entry = {
-                                            'studentId':     student_id,
-                                            'category':      category['name'],
-                                            'fileName':      fn,
-                                            'uploadedAs':    un,
-                                            'action':        'uploaded',
-                                            'actionComment': 'Success (batch upload)' if got_popup else 'Success (batch upload, no popup)',
-                                            'validation':    'pending',
-                                            'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                        }
-                                        batch_logs.append(log_entry)
-                                        category_uploaded_tracker.append({'fn': fn, 'un': un, 'sp': sp, 'log_dict': log_entry})
-                                        self._on_progress({
-                                            'type': 'file_done',
-                                            'file_name': fn,
-                                            'file_size': f_sz,
-                                            'files_done': files_done,
-                                            'bytes_done': bytes_done_overall,
-                                            'total_bytes': total_bytes_overall,
-                                        })
 
-                                    self._log('info', f"Batch upload complete! All {len(valid_batch_items)} files uploaded simultaneously.")
-                                    pending_files = []
-                                except Exception as e:
-                                    self._log('info', f"Batch multi-file upload notice: {describe_exception(e)} — falling back to single-file upload sequence.")
-                                    pending_files = valid_batch_items
+                                        # 4. Check: upload button is clickable again → success
+                                        try:
+                                            btn_els = driver.find_elements(By.XPATH, _upload_btn_xpath)
+                                            if any(b.is_displayed() and b.is_enabled() for b in btn_els):
+                                                _fast_path_done = True
+                                                break
+                                        except Exception:
+                                            pass
 
-                        # --- SEQUENTIAL SINGLE-FILE FALLBACK (for remaining pending files) ---
-                        for file_name, upload_name, src_path in pending_files:
+                                    # If we exited the loop without fast-path success, wait explicitly
+                                    if not _fast_path_done:
+                                        try:
+                                            wait.until(EC.element_to_be_clickable(
+                                                (By.XPATH, _upload_btn_xpath)))
+                                        except Exception:
+                                            if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
+                                                self._log('info', f"Upload widget timeout, but '{file_name}' verified present in folder listing.")
+                                                return True
+                                            raise
+                                    return got_popup_inner
+
+                                upload_ok, got_popup, upload_err = process_item_with_retry(
+                                    f"{student_id}::{file_name}", _do_upload, active_module_id,
+                                    log_func=self._log, abort_flag=self._abort, track_session=False,
+                                )
+
+                                if upload_ok:
+                                    files_done += 1
+                                    total_uploaded += 1
+                                    bytes_done_overall += f_sz
+                                    self._log('info', f"Uploaded '{file_name}' as '{upload_name}'.")
+                                    log_entry = {
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    upload_name,
+                                        'action':        'uploaded',
+                                        'actionComment': 'Success' if got_popup else 'Success (no popup)',
+                                        'validation':    'pending',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    }
+                                    batch_logs.append(log_entry)
+                                    category_uploaded_tracker.append({'fn': file_name, 'un': upload_name, 'sp': src_path, 'log_dict': log_entry})
+                                elif isinstance(upload_err, MalformedFileError):
+                                    files_done += 1
+                                    bytes_done_overall += f_sz
+                                    self._log('warning', f"'{file_name}' rejected by target system as malformed or having an invalid file name: {upload_err}")
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    upload_name,
+                                        'action':        'skipped_malformed',
+                                        'actionComment': f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried.",
+                                        'validation':    'skipped',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                elif isinstance(upload_err, UnsupportedFormatError):
+                                    files_done += 1
+                                    bytes_done_overall += f_sz
+                                    self._log('warning', f"'{file_name}' rejected by target system as an unsupported format: {upload_err}")
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    upload_name,
+                                        'action':        'skipped_unsupported',
+                                        'actionComment': f"Unsupported file format ({upload_err}) -- will not be retried.",
+                                        'validation':    'skipped',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                else:
+                                    err_desc = describe_exception(upload_err) if upload_err else "Upload failed after retries"
+                                    self._log('error', f"Upload failed for '{file_name}' after retries: {err_desc}")
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    upload_name,
+                                        'action':        'failed',
+                                        'actionComment': err_desc,
+                                        'validation':    '-',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                try:
+                                    os.remove(tmp_path)
+                                except OSError:
+                                    pass
+                                self._on_progress({
+                                    'type': 'file_done',
+                                    'file_name': file_name,
+                                    'file_size': f_sz,
+                                    'files_done': total_uploaded,
+                                    'files_total': total_files_overall,
+                                    'bytes_done': bytes_done_overall,
+                                    'total_bytes': total_bytes_overall,
+                                    'student_files_done': files_done,
+                                    'student_files_total': total_files,
+                                })
+
+                            # --- IN-PLACE FINAL PAGE DUMP & VERIFICATION (for this category folder) ---
+                            if category_uploaded_tracker and not self._abort():
+                                expected_un = [item['un'] for item in category_uploaded_tracker]
+                                self._log('info', f"Getting adaptive page dump for category '{category['name']}' ({len(category_uploaded_tracker)} uploads) for in-place verification...")
+                                # Hard-reload the current folder page before snapshotting.
+                                # The portal uses AJAX to add newly uploaded files to the table;
+                                # the upload-tool button reappears quickly but the file rows may
+                                # not yet be present. A full page reload guarantees the listing
+                                # reflects all committed uploads before we check.
+                                try:
+                                    if not category.get('is_root') and category_listing_url:
+                                        driver.get(category_listing_url)
+                                        wait.until(EC.element_to_be_clickable(
+                                            (By.XPATH, config['upload_tool_button_xpath'])))
+                                except Exception:
+                                    pass
+                                final_snapshot = get_portal_table_snapshot_adaptive(
+                                    driver, config,
+                                    expected_filenames=expected_un,
+                                    max_timeout=4.0,
+                                    poll_interval=0.25,
+                                    log_func=self._log
+                                )
+                                for item in category_uploaded_tracker:
+                                    fn = item['fn']
+                                    un = item['un']
+                                    sp = item['sp']
+                                    log_entry = item['log_dict']
+
+                                    is_verified, reason = verify_uploaded_file_strict(
+                                        driver, un, sp, config,
+                                        table_snapshot=final_snapshot,
+                                        deep_hash_check=True,
+                                        log_func=self._log,
+                                    )
+
+                                    if is_verified:
+                                        log_entry['validation'] = reason
+                                        log_entry['actionComment'] = f"Verified ({reason})"
+                                        self._log('info', f"Verified '{fn}' in category '{category['name']}' ({reason}).")
+                                    elif reason == 'checksum_mismatch':
+                                        self._log('warning', f"Checksum mismatch for '{fn}' in category '{category['name']}'. Attempting rollback & single-file re-upload...")
+                                        try:
+                                            delete_portal_file_by_name(driver, wait, un, config, log_func=self._log)
+                                            tmp_path = os.path.join(tmp_upload_dir, un)
+                                            if not os.path.exists(tmp_path):
+                                                shutil.copy2(sp, tmp_path)
+                                            click_xpath(driver, wait, config['upload_tool_button_xpath'], "Upload module button", log_func=self._log)
+                                            file_input = wait.until(EC.presence_of_element_located((By.XPATH, config['file_input_xpath'])))
+                                            set_file_input_files(driver, file_input, [tmp_path], log_func=self._log)
+                                            click_xpath(driver, wait, config['upload_submit_xpath'], "Upload submit", log_func=self._log)
+                                            try_click_xpath(driver, config['upload_popup_ok_xpath'], "Upload confirmation OK", timeout=2, log_func=self._log)
+                                            retry_snapshot = get_portal_table_snapshot_adaptive(
+                                                driver, config, expected_filenames=[un], max_timeout=3.5, log_func=self._log
+                                            )
+                                            retry_ok, retry_reason = verify_uploaded_file_strict(
+                                                driver, un, sp, config,
+                                                table_snapshot=retry_snapshot,
+                                                deep_hash_check=True,
+                                                log_func=self._log
+                                            )
+                                            if retry_ok:
+                                                log_entry['validation'] = retry_reason
+                                                log_entry['actionComment'] = f"Success after rollback retry ({retry_reason})"
+                                                self._log('info', f"Rollback retry succeeded for '{fn}' ({retry_reason}).")
+                                            else:
+                                                log_entry['action'] = 'failed'
+                                                log_entry['validation'] = 'verification_failed'
+                                                log_entry['actionComment'] = "Corrupted upload persisted after rollback retry"
+                                                self._log('error', f"Rollback retry failed for '{fn}'.")
+                                        except Exception as re_err:
+                                            log_entry['action'] = 'failed'
+                                            log_entry['validation'] = 'verification_failed'
+                                            log_entry['actionComment'] = f"Rollback retry error: {describe_exception(re_err)}"
+                                    else:
+                                        # Table snapshot did not capture row, but the batch/single upload transaction was accepted and confirmed
+                                        log_entry['validation'] = 'uploaded_unverified'
+                                        log_entry['actionComment'] = "Uploaded (pending portal table indexing)"
+                                        self._log('info', f"Upload confirmed for '{fn}' in folder '{category['name'] or 'root'}' (pending portal background indexing).")
+
+                            # Return to parent target folder for next category
+                            if not category.get('is_root'):
+                                self._return_to_target_folder(driver, wait, config, files_docs_root_url, target_folder_name, student_id)
+
                             if self._abort():
                                 break
 
-                            f_sz = 0
-                            try:
-                                if os.path.isfile(src_path):
-                                    f_sz = os.path.getsize(src_path)
-                            except OSError:
-                                pass
-
-                            self._on_progress({
-                                'type': 'file_start',
-                                'file_name': file_name,
-                                'file_size': f_sz,
-                                'student_id': student_id,
-                            })
-
-                            tmp_path = os.path.join(tmp_upload_dir, upload_name)
-                            if not os.path.exists(tmp_path):
-                                try:
-                                    shutil.copy2(src_path, tmp_path)
-                                except Exception as e:
-                                    self._log('error', f"Copy failed for '{file_name}': {describe_exception(e)}")
-                                    continue
-
-                            self._log('info', f"Uploading '{file_name}'...")
-
-                            def _do_upload():
-                                # Check if already uploaded (e.g. from previous submit attempt before retry)
-                                if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
-                                    self._log('info', f"File '{file_name}' detected in folder listing prior to submit — skipping duplicate submission.")
-                                    return True
-
-                                click_xpath(driver, wait, config['upload_tool_button_xpath'],
-                                            "Upload module button", log_func=self._log)
-                                file_input = wait.until(EC.presence_of_element_located(
-                                    (By.XPATH, config['file_input_xpath'])))
-                                set_file_input_files(driver, file_input, [tmp_path], log_func=self._log)
-
-                                dialogs_before_submit = get_dialog_signatures(driver)
-                                click_xpath(driver, wait, config['upload_submit_xpath'],
-                                            "Upload submit", log_func=self._log)
-
-                                malformed_msg = detect_malformed_filename_error(
-                                    driver, timeout=2.0, before_signatures=dialogs_before_submit)
-                                if malformed_msg:
-                                    ok_clicked = click_dialog_ok_button(driver, log_func=self._log)
-                                    if not ok_clicked:
-                                        dismiss_error_dialog(driver, log_func=self._log)
-                                    wait.until(EC.element_to_be_clickable(
-                                        (By.XPATH, config['upload_tool_button_xpath'])))
-                                    raise MalformedFileError(malformed_msg)
-
-                                unsupported_msg = detect_unsupported_format_error(driver, timeout=2.0)
-                                if unsupported_msg:
-                                    dismiss_error_dialog(driver, log_func=self._log)
-                                    wait.until(EC.element_to_be_clickable(
-                                        (By.XPATH, config['upload_tool_button_xpath'])))
-                                    raise UnsupportedFormatError(unsupported_msg)
-
-                                got_popup_inner = try_click_xpath(driver, config['upload_popup_ok_xpath'],
-                                                                  "Upload confirmation OK", timeout=2,
-                                                                  log_func=self._log)
-                                # Wait for the folder listing to re-render regardless of whether
-                                # a popup was shown. Without this, the snapshot taken immediately
-                                # after the last upload reads the upload form page (or a transitional
-                                # state) rather than the folder listing, causing all files to appear
-                                # missing and triggering re-uploads on every run.
-                                try:
-                                    wait.until(EC.element_to_be_clickable(
-                                        (By.XPATH, config['upload_tool_button_xpath'])))
-                                except Exception:
-                                    if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
-                                        self._log('info', f"Upload widget timeout, but '{file_name}' verified present in folder listing.")
-                                        return True
-                                    raise
-                                return got_popup_inner
-
-                            upload_ok, got_popup, upload_err = process_item_with_retry(
-                                f"{student_id}::{file_name}", _do_upload, MODULE_ID,
-                                log_func=self._log, abort_flag=self._abort, track_session=False,
-                            )
-
-                            if upload_ok:
-                                files_done += 1
-                                total_uploaded += 1
-                                bytes_done_overall += f_sz
-                                self._log('info', f"Uploaded '{file_name}' as '{upload_name}'.")
-                                log_entry = {
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    upload_name,
-                                    'action':        'uploaded',
-                                    'actionComment': 'Success' if got_popup else 'Success (no popup)',
-                                    'validation':    'pending',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                }
-                                batch_logs.append(log_entry)
-                                category_uploaded_tracker.append({'fn': file_name, 'un': upload_name, 'sp': src_path, 'log_dict': log_entry})
-                            elif isinstance(upload_err, MalformedFileError):
-                                files_done += 1
-                                bytes_done_overall += f_sz
-                                self._log('warning', f"'{file_name}' rejected by target system as malformed or having an invalid file name: {upload_err}")
-                                batch_logs.append({
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    upload_name,
-                                    'action':        'skipped_malformed',
-                                    'actionComment': f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried.",
-                                    'validation':    'skipped',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                })
-                            elif isinstance(upload_err, UnsupportedFormatError):
-                                files_done += 1
-                                bytes_done_overall += f_sz
-                                self._log('warning', f"'{file_name}' rejected by target system as an unsupported format: {upload_err}")
-                                batch_logs.append({
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    upload_name,
-                                    'action':        'skipped_unsupported',
-                                    'actionComment': f"Unsupported file format ({upload_err}) -- will not be retried.",
-                                    'validation':    'skipped',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                })
-                            else:
-                                err_desc = describe_exception(upload_err) if upload_err else "Upload failed after retries"
-                                self._log('error', f"Upload failed for '{file_name}' after retries: {err_desc}")
-                                batch_logs.append({
-                                    'studentId':     student_id,
-                                    'category':      category['name'],
-                                    'fileName':      file_name,
-                                    'uploadedAs':    upload_name,
-                                    'action':        'failed',
-                                    'actionComment': err_desc,
-                                    'validation':    '-',
-                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                })
-                            try:
-                                os.remove(tmp_path)
-                            except OSError:
-                                pass
-                            self._on_progress({
-                                'type': 'file_done',
-                                'file_name': file_name,
-                                'file_size': f_sz,
-                                'files_done': files_done,
-                                'bytes_done': bytes_done_overall,
-                                'total_bytes': total_bytes_overall,
-                            })
-
-                        # --- IN-PLACE FINAL PAGE DUMP & VERIFICATION (for this category folder) ---
-                        if category_uploaded_tracker and not self._abort():
-                            expected_un = [item['un'] for item in category_uploaded_tracker]
-                            self._log('info', f"Getting adaptive page dump for category '{category['name']}' ({len(category_uploaded_tracker)} uploads) for in-place verification...")
-                            # Hard-reload the current folder page before snapshotting.
-                            # The portal uses AJAX to add newly uploaded files to the table;
-                            # the upload-tool button reappears quickly but the file rows may
-                            # not yet be present. A full page reload guarantees the listing
-                            # reflects all committed uploads before we check.
-                            try:
-                                if not category.get('is_root') and category_listing_url:
-                                    driver.get(category_listing_url)
-                                    wait.until(EC.element_to_be_clickable(
-                                        (By.XPATH, config['upload_tool_button_xpath'])))
-                            except Exception:
-                                pass
-                            final_snapshot = get_portal_table_snapshot_adaptive(
-                                driver, config,
-                                expected_filenames=expected_un,
-                                max_timeout=4.0,
-                                poll_interval=0.25,
-                                log_func=self._log
-                            )
-                            for item in category_uploaded_tracker:
-                                fn = item['fn']
-                                un = item['un']
-                                sp = item['sp']
-                                log_entry = item['log_dict']
-
-                                is_verified, reason = verify_uploaded_file_strict(
-                                    driver, un, sp, config,
-                                    table_snapshot=final_snapshot,
-                                    deep_hash_check=True,
-                                    log_func=self._log,
-                                )
-
-                                if is_verified:
-                                    log_entry['validation'] = reason
-                                    log_entry['actionComment'] = f"Verified ({reason})"
-                                    self._log('info', f"Verified '{fn}' in category '{category['name']}' ({reason}).")
-                                elif reason == 'checksum_mismatch':
-                                    self._log('warning', f"Checksum mismatch for '{fn}' in category '{category['name']}'. Attempting rollback & single-file re-upload...")
-                                    try:
-                                        delete_portal_file_by_name(driver, wait, un, config, log_func=self._log)
-                                        tmp_path = os.path.join(tmp_upload_dir, un)
-                                        if not os.path.exists(tmp_path):
-                                            shutil.copy2(sp, tmp_path)
-                                        click_xpath(driver, wait, config['upload_tool_button_xpath'], "Upload module button", log_func=self._log)
-                                        file_input = wait.until(EC.presence_of_element_located((By.XPATH, config['file_input_xpath'])))
-                                        set_file_input_files(driver, file_input, [tmp_path], log_func=self._log)
-                                        click_xpath(driver, wait, config['upload_submit_xpath'], "Upload submit", log_func=self._log)
-                                        try_click_xpath(driver, config['upload_popup_ok_xpath'], "Upload confirmation OK", timeout=2, log_func=self._log)
-                                        retry_snapshot = get_portal_table_snapshot_adaptive(
-                                            driver, config, expected_filenames=[un], max_timeout=3.5, log_func=self._log
-                                        )
-                                        retry_ok, retry_reason = verify_uploaded_file_strict(
-                                            driver, un, sp, config,
-                                            table_snapshot=retry_snapshot,
-                                            deep_hash_check=True,
-                                            log_func=self._log
-                                        )
-                                        if retry_ok:
-                                            log_entry['validation'] = retry_reason
-                                            log_entry['actionComment'] = f"Success after rollback retry ({retry_reason})"
-                                            self._log('info', f"Rollback retry succeeded for '{fn}' ({retry_reason}).")
-                                        else:
-                                            log_entry['action'] = 'failed'
-                                            log_entry['validation'] = 'verification_failed'
-                                            log_entry['actionComment'] = "Corrupted upload persisted after rollback retry"
-                                            self._log('error', f"Rollback retry failed for '{fn}'.")
-                                    except Exception as re_err:
-                                        log_entry['action'] = 'failed'
-                                        log_entry['validation'] = 'verification_failed'
-                                        log_entry['actionComment'] = f"Rollback retry error: {describe_exception(re_err)}"
-                                else:
-                                    # Table snapshot did not capture row, but the batch/single upload transaction was accepted and confirmed
-                                    log_entry['validation'] = 'uploaded_unverified'
-                                    log_entry['actionComment'] = "Uploaded (pending portal table indexing)"
-                                    self._log('info', f"Upload confirmed for '{fn}' in folder '{category['name'] or 'root'}' (pending portal background indexing).")
-
-                        # Return to parent target folder for next category
-                        if not category.get('is_root'):
-                            self._return_to_target_folder(driver, wait, config, files_docs_root_url, target_folder_name, student_id)
-
-                        if self._abort():
-                            break
-
                         students_succeeded += 1
                         student_done = True
-                        SessionManager.update_item_status(MODULE_ID, student_id, success=True)
+                        SessionManager.update_item_status(active_module_id, student_id, success=True)
 
                     except Exception as e:
                         if self._abort():
@@ -815,7 +921,7 @@ class FileUploader:
                                 'validation': '-',
                                 'timestamp': datetime.datetime.now().isoformat(timespec='seconds'),
                             })
-                            SessionManager.update_item_status(MODULE_ID, student_id, success=False)
+                            SessionManager.update_item_status(active_module_id, student_id, success=False)
                             break
 
                     finally:
@@ -828,16 +934,32 @@ class FileUploader:
                 self._on_progress({
                     'type': 'student_done',
                     'students_traversed': idx + 1,
-                    'total_students': len(students)
+                    'total_students': len(students),
+                    'files_done': total_uploaded,
+                    'files_total': total_files_overall,
+                    'bytes_done': bytes_done_overall,
+                    'total_bytes': total_bytes_overall,
                 })
             else:
                 # for/else: only runs if the loop finished all students without
                 # an abort-triggered `break` -- i.e. the run is genuinely complete.
                 loop_completed = True
+                self._on_progress({
+                    'type': 'student_done',
+                    'students_traversed': len(students),
+                    'total_students': len(students),
+                    'files_done': total_uploaded,
+                    'files_total': total_files_overall,
+                    'bytes_done': bytes_done_overall,
+                    'total_bytes': total_bytes_overall,
+                })
 
         finally:
-            if driver:
-                driver.quit()
+            try:
+                safe_quit_driver(driver, log_func=lambda m: self._log('debug', m))
+            except Exception:
+                pass
+            driver = None
             if os.path.isdir(tmp_upload_dir):
                 shutil.rmtree(tmp_upload_dir, ignore_errors=True)
 
@@ -865,49 +987,370 @@ class FileUploader:
             # a crash, or the app closing), leave the session file in place so the
             # next launch can offer to resume exactly where this left off.
             if loop_completed:
-                SessionManager.clear_session(MODULE_ID)
+                SessionManager.clear_session(active_module_id)
                 self._log('info', "[SESSION] Run completed — session cleared.")
             else:
                 self._log('warning', "[SESSION] Run did not finish — progress saved. "
                                       "You'll be asked to resume this session next time the app starts.")
 
+    # ------------------------------------------------------------------
+    # Parallel execution
+    # ------------------------------------------------------------------
+
+    def run_parallel(
+        self,
+        config: dict,
+        students: list,
+        source_dir: str,
+        target_folder_name: str,
+        n_workers: int,
+        devtools: bool = False,
+        on_progress=None,
+        abort_flag=None,
+        log=None,
+        session_inputs: dict | None = None,
+    ) -> None:
+        """Run file uploader with *n_workers* independent Chrome instances
+        working in parallel, each handling a separate slice of students.
+
+        Progress events from all workers are merged and forwarded through the
+        single *on_progress* / *log* callbacks supplied by the caller, so the
+        existing UI progress bar and KPI grid work smoothly.
+        """
+        _log = log or (lambda l, m: None)
+        _prog = on_progress or (lambda d: None)
+        _abort = abort_flag or (lambda: False)
+
+        n_workers = max(1, n_workers)
+        run_start = time.time()
+
+        students = filter_valid_students(students)
+        total_count = len(students)
+        if total_count == 0:
+            _log('warning', "No valid student records to upload.")
+            return
+
+        if target_folder_name == NO_TARGET_FOLDER_LABEL:
+            target_folder_name = ""
+
+        session_inputs = session_inputs or {
+            'source_dir': source_dir,
+            'target_folder_name': target_folder_name,
+            'login_url': config.get('login_url', ''),
+        }
+        session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=total_count)
+        completed_ids = SessionManager.get_all_completed_item_ids(MODULE_ID)
+
+        already_completed_count = 0
+        df_pending = students
+
+        if completed_ids:
+            df_pending = [s for s in students if s['studentId'] not in completed_ids]
+            already_completed_count = total_count - len(df_pending)
+
+            if already_completed_count >= total_count:
+                _log('info', f"[SESSION] All {total_count} students have already been successfully processed! Nothing to upload.")
+                _prog({'type': 'init_totals', 'total_students': total_count, 'total_files': 0, 'total_bytes': 0})
+                _prog({
+                    'type': 'student_done',
+                    'completed': total_count,
+                    'students_traversed': total_count,
+                    'total_students': total_count,
+                    'total': total_count,
+                    'success': True,
+                    'skipped': True,
+                })
+                return
+
+            if already_completed_count > 0:
+                _log('info', f"[SESSION] Found {already_completed_count} of {total_count} students already completed in prior runs. "
+                             f"Skipping them and distributing remaining {len(df_pending)} students across workers...")
+
+        # Pre-scan total files and bytes across all students
+        total_files_overall = 0
+        total_bytes_overall = 0
+        for s in students:
+            s_id = s.get('studentId', '')
+            s_root = os.path.join(source_dir, s_id)
+            if not os.path.isdir(s_root) and len(students) == 1 and list_category_folders(source_dir):
+                s_root = source_dir
+            for cat in list_category_folders(s_root):
+                for fp in cat['files']:
+                    try:
+                        total_files_overall += 1
+                        total_bytes_overall += os.path.getsize(fp)
+                    except OSError:
+                        pass
+
+        _prog({
+            'type': 'init_totals',
+            'total_students': total_count,
+            'total_files': total_files_overall,
+            'total_bytes': total_bytes_overall,
+        })
+
+        pending_count = len(df_pending)
+        n_workers = min(n_workers, pending_count)
+        chunk_size = math.ceil(pending_count / n_workers)
+        chunks = [
+            df_pending[i : i + chunk_size]
+            for i in range(0, pending_count, chunk_size)
+        ]
+        actual_workers = len(chunks)
+
+        _log('info',
+             f"[PARALLEL] Starting {actual_workers} worker(s) — "
+             f"{pending_count} pending students split into chunks of ~{chunk_size} (Total: {total_count}, Files: {total_files_overall}).")
+
+        if already_completed_count > 0:
+            _prog({
+                'type': 'student_done',
+                'completed': already_completed_count,
+                'students_traversed': already_completed_count,
+                'total_students': total_count,
+                'total': total_count,
+                'bytes_done': 0,
+                'total_bytes': total_bytes_overall,
+                'success': True,
+                'skipped': True,
+            })
+
+        _counter_lock = threading.Lock()
+        _csv_write_lock = threading.Lock()
+        _shared = {
+            'students_traversed': already_completed_count,
+            'students_succeeded': already_completed_count,
+            'files_done': 0,
+            'bytes_done': 0,
+        }
+        shared_run_id = new_run_id()
+
+        def _worker(worker_idx: int, chunk_students: list):
+            worker_module_id = f"{MODULE_ID}_w{worker_idx}"
+            uploader = FileUploader()
+            uploader._run_id = shared_run_id
+            uploader._csv_lock = _csv_write_lock
+
+            def worker_log(lvl, msg):
+                _log(lvl, f"[W{worker_idx}] {msg}")
+
+            def worker_progress(data: dict):
+                p_type = data.get('type')
+                if p_type == 'file_done':
+                    with _counter_lock:
+                        _shared['files_done'] += 1
+                        f_bytes = data.get('file_size', 0)
+                        if f_bytes:
+                            _shared['bytes_done'] += f_bytes
+                        merged = dict(data)
+                        merged['files_done'] = _shared['files_done']
+                        merged['files_total'] = total_files_overall
+                        if total_bytes_overall > 0:
+                            merged['bytes_done'] = _shared['bytes_done']
+                            merged['total_bytes'] = total_bytes_overall
+                    _prog(merged)
+                elif p_type == 'student_done':
+                    with _counter_lock:
+                        _shared['students_traversed'] += 1
+                        _shared['students_succeeded'] += 1
+                        merged = dict(data)
+                        merged['students_traversed'] = _shared['students_traversed']
+                        merged['total_students'] = total_count
+                        merged['bytes_done'] = _shared['bytes_done']
+                        merged['total_bytes'] = total_bytes_overall
+                    _prog(merged)
+                elif p_type == 'student_start':
+                    merged = dict(data)
+                    with _counter_lock:
+                        merged['students_traversed'] = _shared['students_traversed']
+                        merged['total_students'] = total_count
+                        merged['bytes_done'] = _shared['bytes_done']
+                        merged['total_bytes'] = total_bytes_overall
+                    _prog(merged)
+                elif p_type in ('init_totals', 'files_total'):
+                    pass
+                else:
+                    _prog(data)
+
+            try:
+                uploader.run(
+                    config=config,
+                    students=chunk_students,
+                    source_dir=source_dir,
+                    target_folder_name=target_folder_name,
+                    devtools=devtools,
+                    on_progress=worker_progress,
+                    abort_flag=_abort,
+                    log=worker_log,
+                    session_inputs=session_inputs,
+                    _module_id_override=worker_module_id,
+                )
+            except Exception as w_err:
+                worker_log('error', f"Worker encountered an unhandled error: {w_err}")
+
+        threads = [
+            threading.Thread(
+                target=_worker,
+                args=(idx, chunk),
+                name=f"UploaderWorker-{idx}",
+                daemon=True,
+            )
+            for idx, chunk in enumerate(chunks)
+        ]
+
+        for idx, t in enumerate(threads):
+            if _abort():
+                break
+            t.start()
+            if idx < len(threads) - 1:
+                time.sleep(0.4)
+
+        for t in threads:
+            t.join()
+
+        duration = time.time() - run_start
+        total_success = _shared['students_succeeded']
+        total_files = _shared['files_done']
+
+        if not _abort() and total_success >= total_count:
+            SessionManager.clear_session(MODULE_ID)
+            for idx in range(actual_workers):
+                SessionManager.clear_session(f"{MODULE_ID}_w{idx}")
+            _log('info', "[SESSION] All students processed in parallel — session cleared.")
+
+        _log('info',
+             f"[PARALLEL] All {actual_workers} worker(s) finished. "
+             f"Duration: {duration:.1f}s | "
+             f"Success: {total_success}/{total_count} students | "
+             f"Files: {total_files}")
+
+        learning_engine.record_run_summary(
+            module_name="File Uploader (Parallel)",
+            total_items=total_count,
+            success_count=total_success,
+            total_files=total_files,
+            duration_sec=duration,
+        )
+
     def _return_to_target_folder(self, driver, wait, config: dict, files_docs_root_url: str, target_folder_name: str, student_id: str = "") -> None:
         """Return to the parent target folder (e.g. 'Admissions Inquiry') efficiently.
-        Uses fast breadcrumb navigation, avoiding full page reloads.
+        Uses fast breadcrumb navigation with navigation confirmation, avoiding full page reloads.
+        After clicking a breadcrumb, waits up to 3 s for the page to actually transition
+        back to the parent (i.e. the target folder's contents table appears, or the
+        subfolder breadcrumb crumb disappears). Falls back to driver.get() if not confirmed.
         """
+        import time as _rtime
+        from selenium.webdriver.common.by import By as _RBy
+
+        # Normalize empty / root labels to empty string so the root-reload branch fires.
+        _ROOT_LABELS = {"", "root", "root (files & documents)", "(none - upload to files & documents root)"}
+        _tname_norm = (target_folder_name or "").strip().lower()
+        if _tname_norm in _ROOT_LABELS:
+            target_folder_name = ""
+
         if target_folder_name:
+            table_xpath = config.get('folder_listing_table_xpath', '')
             lit = xpath_literal(target_folder_name)
             lit_lower = xpath_literal(target_folder_name.strip().lower())
+            target_clean = " ".join(target_folder_name.strip().lower().split())
+
+            # XPath that is TRUE when we have reached the target folder
+            # (the target's OWN name appears in the breadcrumb, and the table no longer
+            # shows the target folder as a clickable row entry — we are now INSIDE it).
+            # We poll for the folder table to contain subfolder rows, which means we
+            # have left root. The simplest reliable signal: the breadcrumb shows target_folder_name.
             breadcrumb_xpaths = [
-                f"//*[contains(@class,'breadcrumb') or contains(@class,'nav') or contains(@id,'breadcrumb') or contains(@id,'nav')]//a[normalize-space(.) = {lit} or contains(normalize-space(.), {lit})]",
-                f"//a[normalize-space(.) = {lit}]",
-                f"//a[contains(normalize-space(.), {lit}) and not(ancestor::tbody//tr[.//input[@type='checkbox']])]",
-                f"//a[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = {lit_lower}]",
+                # Exact equality on breadcrumb links first (most reliable)
+                f"//*[contains(@class,'breadcrumb') or contains(@class,'nav') or contains(@id,'breadcrumb') or contains(@id,'nav')]//a[normalize-space(.) = {lit}]",
+                f"//*[contains(@class,'breadcrumb')]//a[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = {lit_lower}]",
+                # General link equality (not inside table checkboxes)
+                f"//a[normalize-space(.) = {lit} and not(ancestor::tbody//tr[.//input[@type='checkbox']])]",
+                f"//a[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = {lit_lower} and not(ancestor::tbody//tr[.//input[@type='checkbox']])]",
             ]
+
+            clicked = False
             for bxp in breadcrumb_xpaths:
                 try:
-                    elements = driver.find_elements(By.XPATH, bxp)
+                    elements = driver.find_elements(_RBy.XPATH, bxp)
                     for el in elements:
-                        if el.is_displayed():
-                            try:
-                                el.click()
-                            except Exception:
-                                driver.execute_script("arguments[0].click();", el)
-                            time.sleep(0.35)
-                            return
+                        if not el.is_displayed():
+                            continue
+                        # Verify exact text match to avoid clicking 'Application Received'
+                        # when looking for 'Admissions Inquiry', etc.
+                        raw = el.get_attribute("textContent") or el.get_attribute("innerText") or el.text or ""
+                        raw_clean = " ".join(raw.replace('\xa0', ' ').strip().lower().split())
+                        if raw_clean != target_clean:
+                            continue
+                        try:
+                            el.click()
+                        except Exception:
+                            driver.execute_script("arguments[0].click();", el)
+                        clicked = True
+                        break
+                except Exception:
+                    pass
+                if clicked:
+                    break
+
+            if clicked:
+                # Confirm navigation: poll up to 5 s for the page to actually
+                # transition to the target folder.
+                # Success signals (any one suffices):
+                #   (a) table xpath is present and no longer shows target_folder_name
+                #       as a clickable row link (we are INSIDE, not at root)
+                #   (b) a breadcrumb exactly equal to target_folder_name is the LAST
+                #       breadcrumb entry (i.e., current location IS target folder)
+                _confirmed = False
+                _tf_lit = xpath_literal(target_folder_name)
+                _inside_xpath = (
+                    f"{table_xpath}//a[normalize-space(.) = {_tf_lit}]"
+                    if table_xpath else
+                    f"//table//a[normalize-space(.) = {_tf_lit}]"
+                )
+                for _w in range(20):  # 20 × 0.15 s = 3 s max
+                    _rtime.sleep(0.15)
+                    try:
+                        els = driver.find_elements(_RBy.XPATH, _inside_xpath)
+                        # If target folder link has disappeared from listing table,
+                        # we are now INSIDE it.
+                        if not any(e.is_displayed() for e in els):
+                            _confirmed = True
+                            break
+                    except Exception:
+                        pass
+
+                if _confirmed:
+                    self._log('debug', f"[RETURN] Confirmed back inside '{target_folder_name}' via breadcrumb.")
+                    return
+                else:
+                    self._log('warning', f"[RETURN] Breadcrumb clicked for '{target_folder_name}' but navigation not confirmed. Falling back to full reload.")
+            else:
+                # Try browser history back if breadcrumb link was not found
+                try:
+                    driver.back()
+                    wait_for_page_ready(driver, timeout=4)
+                    # Confirm we landed on the right page
+                    _rtime.sleep(0.5)
+                    _confirmed_back = False
+                    _tf_lit2 = xpath_literal(target_folder_name)
+                    _inside2 = (
+                        f"{table_xpath}//a[normalize-space(.) = {_tf_lit2}]"
+                        if table_xpath else
+                        f"//table//a[normalize-space(.) = {_tf_lit2}]"
+                    )
+                    try:
+                        _els2 = driver.find_elements(_RBy.XPATH, _inside2)
+                        if not any(e.is_displayed() for e in _els2):
+                            _confirmed_back = True
+                    except Exception:
+                        pass
+                    if _confirmed_back:
+                        self._log('debug', f"[RETURN] Confirmed inside '{target_folder_name}' via browser back.")
+                        return
                 except Exception:
                     pass
 
-            # Try browser history back if breadcrumb link was not found
-            try:
-                driver.back()
-                wait_for_page_ready(driver, timeout=4)
-                time.sleep(0.35)
-                return
-            except Exception:
-                pass
-
-        # Fallback to full target folder navigation only if in-page methods fail
+        # Fallback: full re-navigation via driver.get() + click into target folder
         self._go_to_target_folder(driver, wait, config, files_docs_root_url, target_folder_name, student_id)
 
     def audit_and_remediate(self, driver, wait, config: dict, student_id: str, source_dir: str, files_docs_root_url: str, target_folder_name: str) -> dict:
@@ -1342,11 +1785,8 @@ class FileUploader:
                 })
 
         finally:
-            if driver:
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
+            safe_quit_driver(driver)
+            driver = None
 
         return {
             'students_audited': students_audited,
@@ -1407,10 +1847,7 @@ class FileUploader:
                 driver_alive = True
             except Exception:
                 driver_alive = False
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
+                safe_quit_driver(driver)
                 driver = None
 
         if not driver_alive:
@@ -1614,10 +2051,16 @@ class FileUploader:
         import time as _time
         from selenium.webdriver.common.by import By as _By2
 
+        # Normalize empty / root labels
+        _ROOT_LABELS_GTF = {"", "root", "root (files & documents)", "(none - upload to files & documents root)"}
+        if (target_folder_name or "").strip().lower() in _ROOT_LABELS_GTF:
+            target_folder_name = ""
+
         if not target_folder_name:
-            if "files_and_documents" not in driver.current_url.lower():
-                driver.get(files_docs_root_url)
-                wait_for_page_ready(driver, timeout=10)
+            # Always reload to the known-good root URL; do NOT rely on current_url check
+            # because when inside a subfolder the URL may still contain 'files_and_documents'.
+            driver.get(files_docs_root_url)
+            wait_for_page_ready(driver, timeout=10)
             try:
                 wait.until(EC.presence_of_element_located((By.XPATH, config.get('folder_listing_table_xpath', '//table'))))
             except Exception:
@@ -1842,13 +2285,23 @@ class FileUploader:
     def _write_log_csv(self, source_dir: str, log_data: list) -> None:
         run_id = getattr(self, '_run_id', None) or new_run_id()
         log_file_path = os.path.join(source_dir, f"uploads_execution_log_{run_id}.csv")
-        file_exists = os.path.isfile(log_file_path)
         headers = ['studentId', 'category', 'fileName', 'uploadedAs', 'action', 'actionComment', 'validation', 'timestamp']
+        lock = getattr(self, '_csv_lock', None)
         try:
-            with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=headers)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerows(log_data)
+            if lock:
+                with lock:
+                    file_exists = os.path.isfile(log_file_path)
+                    with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
+                        writer = csv.DictWriter(f, fieldnames=headers)
+                        if not file_exists:
+                            writer.writeheader()
+                        writer.writerows(log_data)
+            else:
+                file_exists = os.path.isfile(log_file_path)
+                with open(log_file_path, mode='a', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=headers)
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerows(log_data)
         except Exception as e:
             self._log('error', f"Failed writing log CSV: {e}")

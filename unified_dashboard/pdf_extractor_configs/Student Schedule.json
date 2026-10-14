@@ -1,9 +1,64 @@
 {
   "report_type": "student_schedule",
   "record_separator": "Bayamon Community College",
+  "exclude_patterns": [
+    "Page\\s+\\d+\\s+of\\s+\\d+",
+    "Powered by TCPDF.*",
+    "https?://\\S+",
+    "^\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}",
+    "^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),.*Page\\s+\\d+"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^(?:Bayamon\\s+Community\\s+College\\s+)?(.+)$",
+    "stop_at": ""
+  },
+  "address_block": null,
+  "repeating_sections": [],
+  "summary_fields": [
+    {"name": "program_description", "pattern": "Program Description:\\s*(.+?)(?:\\s+Drop Date:|\\s+Group:|\\r?\\n|$)"},
+    {"name": "program_description_continuation", "pattern": "Program Description:[^\\n\\r]*\\r?\\n(?:[ \\t]*https?://\\S+[ \\t]*\\r?\\n)?(?!\\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \\t]*([^\\n\\r]+)"},
+    {"name": "drop_date", "pattern": "Drop Date:\\s*(\\d{2}/\\d{2}/\\d{4})"},
+    {"name": "group", "pattern": "Group:\\s*(\\S+)"},
+    {"name": "first_term", "pattern": "First Term:\\s*(\\d{2}/\\d{2}/\\d{4})"},
+    {"name": "exp_grad_date", "pattern": "Exp Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})"},
+    {"name": "ft_pt", "pattern": "FT/PT:\\s*(Full Time|Part Time|\\S+)"},
+    {"name": "status", "pattern": "Status:\\s*(Active|Graduated|Dropped|Withdrawn|Inactive|Leave\\s+of\\s+Absence|Probation|[A-Za-z]+)(?=\\s+(?:Exp\\s+Grad\\s+Date|Grad\\s+Date|Session|FT/PT|First\\s+Term):|\\s+|$)"},
+    {"name": "grad_date", "pattern": "(?<!Exp )Grad Date:\\s*(\\d{2}/\\d{2}/\\d{4})"},
+    {"name": "session", "pattern": "Session:\\s*([A-Za-z0-9\\-]+)"},
+    {"name": "term", "pattern": "Term:\\s*(\\d{2}/\\d{2}/\\d{4}(?:\\s*-\\s*(?:\\d{2}/\\d{2}/\\d{4})?)?)"},
+    {"name": "id", "pattern": "(?:ID|Id):[ \\t]*([A-Za-z0-9\\-]+)"}
+  ],
+  "computed_fields": [
+    {
+      "name": "program",
+      "join": ["program_description", "program_description_continuation"],
+      "sep": " "
+    }
+  ],
+  "data_rows": {
+    "pattern": "^([A-Z]{2,4}\\d{3,4}[A-Z]?)\\s+\\(([^)]+)\\)\\s+(.+?)\\s+(\\d+\\.\\d{2})\\s+(\\d+\\.\\d{2})\\s+(.+?)\\s+(\\d{2}/\\d{2}/\\d{4})\\s+to\\s+(\\d{2}/\\d{2}/\\d{4})\\s+((?:(?:M|Tu|W|Th|F|Sa|Su|TBA|TBD)(?:,\\s*)?)+)\\s+(.+?)\\s+(\\d{2}:\\d{2}\\s+[AP]M)\\s+to\\s+(\\d{2}:\\d{2}\\s+[AP]M)\\s*$",
+    "columns": [
+      "course",
+      "course_version",
+      "course_description",
+      "units",
+      "fa_units",
+      "instructor",
+      "class_meetings_start",
+      "class_meetings_end",
+      "days_of_week",
+      "room",
+      "class_time_start",
+      "class_time_end"
+    ]
+  },
   "output_columns": [
     "student_name",
+    "id",
+    "program",
     "program_description",
+    "program_description_continuation",
     "drop_date",
     "group",
     "first_term",
@@ -24,6 +79,8 @@
     "days_of_week",
     "room",
     "class_time_start",
-    "class_time_end"
+    "class_time_end",
+    "source_file",
+    "page_number"
   ]
 }

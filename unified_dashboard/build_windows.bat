@@ -8,15 +8,22 @@ echo ============================================================
 cd /d "%~dp0"
 
 where python >nul 2>nul
-if errorlevel 1 (
-    echo ERROR: Python was not found on PATH. Install Python 3.10+ and re-run this script.
-    exit /b 1
+if exist ".venv\Scripts\python.exe" (
+    set "PY_CMD=.venv\Scripts\python.exe"
+    echo Using virtual environment Python: .venv\Scripts\python.exe
+) else (
+    where python >nul 2>nul
+    if errorlevel 1 (
+        echo ERROR: Python was not found on PATH and no .venv found. Install Python 3.10+ and re-run this script.
+        exit /b 1
+    )
+    set "PY_CMD=python"
 )
 
 echo [1/3] Installing / upgrading dependencies...
-python -m pip install --upgrade pip
-python -m pip install --upgrade pyinstaller pyinstaller-hooks-contrib
-python -m pip install -r requirements.txt
+"%PY_CMD%" -m pip install --upgrade pip
+"%PY_CMD%" -m pip install --upgrade pyinstaller pyinstaller-hooks-contrib
+"%PY_CMD%" -m pip install -r requirements.txt
 if errorlevel 1 (
     echo ERROR: Dependency installation failed. See output above.
     exit /b 1
@@ -37,19 +44,7 @@ if exist dist rmdir /s /q dist
 
 echo.
 echo [3/3] Building standalone EXE (this may take a few minutes)...
-python -m PyInstaller build.spec --clean --noconfirm
-if errorlevel 1 (
-    echo.
-    echo ============================================================
-    echo  BUILD FAILED
-    echo  If the error above mentions "Permission denied" on
-    echo  UnifiedDashboard.exe, close the app if it's running, add an
-    echo  antivirus/Defender exclusion for this folder (real-time
-    echo  scanners often lock a freshly written .exe for a moment),
-    echo  then re-run this script.
-    echo ============================================================
-    exit /b 1
-)
+"%PY_CMD%" -m PyInstaller build.spec --clean --noconfirm
 
 echo.
 if exist "dist\UnifiedDashboard.exe" (
@@ -64,7 +59,11 @@ if exist "dist\UnifiedDashboard.exe" (
     echo ============================================================
 ) else (
     echo ============================================================
-    echo  BUILD FAILED - check output above for errors
+    echo  BUILD FAILED
+    echo  UnifiedDashboard.exe was not created.
+    echo  If the error mentions "Permission denied", close the app if
+    echo  running, add an antivirus/Defender exclusion for this folder,
+    echo  and re-run this script.
     echo ============================================================
     exit /b 1
 )

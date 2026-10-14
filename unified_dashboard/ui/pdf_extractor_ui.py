@@ -41,6 +41,8 @@ from modules.pdf_extractor import (
     build_anchored_pattern, build_row_pattern, describe_field_map, remove_field_entry,
     debug_log_path, execution_log_path, read_debug_log_tail, read_execution_log_rows,
 )
+from ui.pdf_review_tab import PdfReviewTab
+from modules.pdf_spatial_ml import synthesize_preset_from_pdf
 
 # Colour tags used in the line viewer to show what the current config would
 # already match/exclude/split on.
@@ -78,12 +80,14 @@ class PdfExtractorUI(BaseToolFrame):
         # Multi-tab workspace setup on self.notebook
         self.tab_mapper = tk.Frame(self.notebook, bg=BG_CARD, padx=12, pady=10)
         self.tab_json = tk.Frame(self.notebook, bg=BG_CARD, padx=12, pady=10)
+        self.tab_review = tk.Frame(self.notebook, bg=BG_CARD, padx=12, pady=10)
 
         try:
             self.notebook.tab(self.tab_config, text=" \U0001F4C1 1. Setup & Presets ")
             self.notebook.insert(1, self.tab_mapper, text=" \U0001F3AF 2. Visual Field Mapper ")
             self.notebook.insert(2, self.tab_json, text=" \U0001F6E0 3. Advanced JSON ")
-            self.notebook.tab(self.tab_execution, text=" \U0001F4CA 4. Live Activity & Logs ")
+            self.notebook.insert(3, self.tab_review, text=" \U0001F50D 4. Review & Self-Tune ")
+            self.notebook.tab(self.tab_execution, text=" \U0001F4CA 5. Live Activity & Logs ")
         except Exception:
             pass
 
@@ -91,6 +95,9 @@ class PdfExtractorUI(BaseToolFrame):
         self._populate_inputs()
         self._build_field_mapper_tab()
         self._build_advanced_json_tab()
+
+        self.review_tab = PdfReviewTab(self.tab_review, self)
+        self.review_tab.pack(fill="both", expand=True)
 
         if hasattr(self, "btn_open_log"):
             self.btn_open_log.pack_forget()
@@ -183,6 +190,12 @@ class PdfExtractorUI(BaseToolFrame):
             command=self._on_delete_preset
         ).pack(side="left", padx=3)
 
+        tk.Button(
+            preset_row, text="\U0001F916 Auto-Detect", font=FONT_BODY_BOLD,
+            bg=ACCENT_SUCCESS, fg="white", activebackground=ACCENT_SUCCESS_HOVER,
+            bd=0, padx=10, pady=2, cursor="hand2", command=self._on_auto_detect_preset_ml
+        ).pack(side="left", padx=(8, 3))
+
         # Card 3: Active Config Overview & Quick Actions
         overview_card = tk.LabelFrame(
             c, text=" \U0001F4CA Active Extraction Configuration Overview ",
@@ -210,6 +223,11 @@ class PdfExtractorUI(BaseToolFrame):
     def _on_source_folder_set(self, path: str):
         self.source_folder = path
         self._auto_load_sample_pdf(path)
+        if hasattr(self, "review_tab"):
+            try:
+                self.review_tab._refresh_sample_dropdown()
+            except Exception:
+                pass
 
     def _pick_output_file(self):
         path = filedialog.asksaveasfilename(
@@ -1305,9 +1323,26 @@ class PdfExtractorUI(BaseToolFrame):
                 sep_line = "\u2500" * 50
 
                 if not records:
-                    lines.append("\u26A0  No records matched.")
-                    lines.append("   Check 'record_separator' \u2014 it must exactly match")
-                    lines.append("   text that appears in your PDF.")
+                    lines.append("\u26A0  No records matched configured 'record_separator'.")
+                    lines.append("   Check 'record_separator' \u2014 it must match text in your PDF.")
+                    if full_text.strip():
+                        lines.append("")
+                        lines.append(sep_line)
+                        lines.append("Fallback Preview (Evaluated against full document text):")
+                        fb_name, fb_addr, fb_rep, fb_summary, fb_rows = engine.extract_record(full_text.strip())
+                        preview = engine.preview_config_on_block(full_text.strip())
+                        lines.append(f"  Name          : {preview.get('name', 'N/A')}")
+                        lines.append(f"  Data rows     : {preview.get('data_rows_count', 0)}")
+                        for sf_name, sf_val in (preview.get('summary_fields') or {}).items():
+                            lines.append(f"  {sf_name} : {sf_val}")
+                        fb_row_data = fb_rows if fb_rows else ([{}] if fb_summary or fb_name != 'N/A' else [])
+                        for dr in fb_row_data:
+                            r = {}
+                            if fb_name != 'N/A':
+                                r['student_name'] = fb_name
+                            r.update(fb_summary)
+                            r.update(dr)
+                            all_preview_rows.append(r)
                 else:
                     for rec_idx, (block, page_num) in enumerate(records, 1):
                         name, address, rep_sections, summary, data_rows = engine.extract_record(block)
@@ -1449,6 +1484,74 @@ class PdfExtractorUI(BaseToolFrame):
         self.preset_var.set("(unsaved / custom)")
         self.log("info", f"Deleted config preset '{name}'.")
 
+    def _on_auto_detect_preset_ml(self):
+        sample_path = self._verify_pdf_path
+        if not sample_path or not os.path.isfile(sample_path):
+            if self.source_folder and os.path.isdir(self.source_folder):
+                for f in os.listdir(self.source_folder):
+                    if f.lower().endswith(".pdf"):
+                        sample_path = os.path.join(self.source_folder, f)
+                        break
+
+        if not sample_path or not os.path.isfile(sample_path):
+            sample_path = filedialog.askopenfilename(
+                title="Select Sample PDF for ML Layout Analysis",
+                filetypes=[("PDF files", "*.pdf;*.PDF")]
+            )
+
+        if not sample_path or not os.path.isfile(sample_path):
+            return
+
+        try:
+            preset = synthesize_preset_from_pdf(sample_path)
+            doc_title = preset.get("document_title")
+            rep_type = preset.get("report_type")
+            if doc_title:
+                base_title = doc_title
+            elif rep_type == "student_schedule":
+                base_title = "Student Schedule"
+            elif rep_type == "student_transcript":
+                base_title = "Student Transcript"
+            elif rep_type == "student_ledger":
+                base_title = "Student Ledger"
+            elif rep_type == "resume":
+                base_title = "Resume"
+            elif rep_type == "attendance":
+                base_title = "Attendance"
+            elif rep_type == "invoice":
+                base_title = "Invoice"
+            else:
+                base_title = preset.get("record_separator") or os.path.splitext(os.path.basename(sample_path))[0]
+            default_name = f"{base_title} (Auto ML)"
+            preset_name = simpledialog.askstring(
+                "Save ML-Generated Preset",
+                "Enter a name for this auto-detected preset:",
+                initialvalue=default_name,
+                parent=self
+            )
+            if not preset_name:
+                return
+
+            save_preset(preset_name, preset)
+            self._refresh_preset_menu()
+            self.preset_var.set(preset_name)
+            self._load_config_into_editor(preset)
+            self._refresh_fields_table()
+
+            # Load into line viewer and review tab
+            self._load_verify_pdf(sample_path)
+            self.review_tab.load_pdf_for_review(sample_path)
+
+            messagebox.showinfo(
+                "ML Preset Generated",
+                f"Successfully synthesized preset '{preset_name}'!\n\n"
+                f"• Detected {len(preset.get('summary_fields', []))} key-value fields\n"
+                f"• Detected table with {len(preset.get('data_rows', {}).get('columns', [])) if preset.get('data_rows') else 0} columns\n\n"
+                "The preset has been loaded into the Visual Field Mapper and Review tab."
+            )
+        except Exception as e:
+            messagebox.showerror("ML Analysis Failed", f"Could not synthesize preset: {describe_exception(e)}")
+
     def _load_config_into_editor(self, cfg: dict):
         self.txt_config.delete("1.0", "end")
         self.txt_config.insert("1.0", json.dumps(cfg, indent=2, ensure_ascii=False))
@@ -1519,6 +1622,8 @@ class PdfExtractorUI(BaseToolFrame):
                 log=self.log
             )
             self.after(0, self._refresh_logs_view)
+            if not self.abort_requested:
+                self.after(600, self._prompt_post_run_review)
             return not self.abort_requested
         except Exception as e:
             import traceback
@@ -1526,6 +1631,14 @@ class PdfExtractorUI(BaseToolFrame):
             self.log("debug", traceback.format_exc())
             self.after(0, self._refresh_logs_view)
             return False
+
+    def _prompt_post_run_review(self):
+        try:
+            self.review_tab.load_random_sample()
+            self.notebook.select(self.tab_review)
+            self.log("info", "[ML Tuning] Switched to 'Review & Self-Tune' tab for random sample verification.")
+        except Exception:
+            pass
 
     def verify_single_task(self, task: QueueTask):
         output_xlsx = task.inputs.get("output_xlsx", "")

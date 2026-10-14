@@ -17,15 +17,35 @@ __pycache__/
 unified_dashboard/build/
 unified_dashboard/dist/*.exe
 unified_dashboard/dist/*.pkg
+unified_dashboard/dist/
+*.spec
 
 # Scratch/temp
 export test/
 upload test/
 pd to data/
+scratch_*.py
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Session & credentials (sensitive)
+unified_dashboard/sessions/
+unified_dashboard/settings.json
+
+# Large generated/cached data
+unified_dashboard/learning_data.json
+unified_dashboard/pdf_extractor_state.json
 
 # Windows
 desktop.ini
+Thumbs.db
 
 # IDE
 .vscode/
 .idea/
+
+# pytest
+.pytest_cache/

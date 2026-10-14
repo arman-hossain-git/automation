@@ -696,7 +696,7 @@
         }
       },
       "latencies": {
-        "page_load": 3.364
+        "page_load": 3.167
       },
       "strategies": {
         "files_documents_last_successful_strategy": "href pattern match"

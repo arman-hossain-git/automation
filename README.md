@@ -6,6 +6,18 @@ Built with Python, PySide6 (Qt for Python), Selenium, and `pdfplumber`, the suit
 
 ---
 
+## 💾 Download Standalone Windows Executable (.exe)
+
+> **No installation or Python required!**
+> 
+> You can download the ready-to-run **`UnifiedDashboard.exe`** directly from GitHub Releases:
+> 
+> 👉 **[Download Latest UnifiedDashboard.exe (Windows)](https://github.com/arman-hossain-git/automation/releases/latest)**
+> 
+> Just double-click the downloaded `.exe` to launch the application. *(Note: Google Chrome must be installed on your machine).*
+
+---
+
 ## 📑 Table of Contents
 - [Overview](#-overview)
 - [Key Features](#-key-features)

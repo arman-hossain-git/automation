@@ -710,7 +710,31 @@ def select_student_row(
     while time.time() < end_time:
         try:
             candidates = driver.find_elements(By.XPATH, row_xpath)
+            if not candidates and list_xpath:
+                # Fallback: search anywhere on page if container-scoped search yielded nothing
+                candidates = driver.find_elements(
+                    By.XPATH,
+                    f"//*[contains(normalize-space(.), '{student_id}') "
+                    f"and not(.//*[contains(normalize-space(.), '{student_id}')])]"
+                )
+
             visible = [c for c in candidates if c.is_displayed()]
+            if not visible and candidates:
+                # Element exists in DOM but may be scrolled out of view or in an overflow container
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+                        candidates[0]
+                    )
+                    time.sleep(0.1)
+                    if candidates[0].is_displayed():
+                        visible = [candidates[0]]
+                    else:
+                        # Fallback to candidates[0] for JS click even if Selenium visibility heuristic is False
+                        visible = [candidates[0]]
+                except Exception:
+                    pass
+
             if not visible:
                 time.sleep(0.15)
                 continue

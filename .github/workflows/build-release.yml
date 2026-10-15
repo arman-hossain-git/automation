@@ -1,0 +1,75 @@
+name: Build Standalone Windows Executable
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build PySide6 Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'unified_dashboard/requirements.txt'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pyinstaller-hooks-contrib
+          python -m pip install -r unified_dashboard/requirements.txt
+
+      - name: Build Executable with PyInstaller
+        working-directory: unified_dashboard
+        run: |
+          python -m PyInstaller build.spec --clean --noconfirm
+
+      - name: Verify Executable Exists
+        run: |
+          if (Test-Path "unified_dashboard/dist/UnifiedDashboard.exe") {
+            $size = (Get-Item "unified_dashboard/dist/UnifiedDashboard.exe").Length / 1MB
+            Write-Host "Success: UnifiedDashboard.exe built ($([math]::Round($size, 2)) MB)"
+          } else {
+            Write-Error "UnifiedDashboard.exe not found in dist/"
+            exit 1
+          }
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnifiedDashboard-Windows-EXE
+          path: unified_dashboard/dist/UnifiedDashboard.exe
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.3
+          name: "Unified System Automation Suite v1.0.3 (Ready-to-Execute)"
+          draft: false
+          prerelease: false
+          files: unified_dashboard/dist/UnifiedDashboard.exe
+          body: |
+            ## 🚀 Unified System Automation Suite (Standalone Windows Executable)
+
+            This release provides a single, portable, ready-to-run `.exe` for Windows.
+
+            ### Instructions for Users:
+            1. Download **`UnifiedDashboard.exe`** from the Assets list below.
+            2. Double-click **`UnifiedDashboard.exe`** to launch the dashboard.
+            3. **No Python or command-line installation required.**
+            4. *Note: Google Chrome must be installed on your computer for automation tasks.*

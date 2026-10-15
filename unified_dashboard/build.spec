@@ -6,16 +6,23 @@ block_cipher = None
 
 # Collect all data files needed at runtime
 datas = [
-    ('settings.json', '.'),
-    ('learning_data.json', '.'),
     ('pdf_extractor_configs', 'pdf_extractor_configs'),
     ('core', 'core'),
     ('modules', 'modules'),
-    ('ui', 'ui'),
+    ('ui_qt', 'ui_qt'),
 ]
 
-# Collect customtkinter assets (fonts, themes, images)
-datas += collect_data_files('customtkinter')
+if os.path.exists('settings.json'):
+    datas.append(('settings.json', '.'))
+if os.path.exists('learning_data.json'):
+    datas.append(('learning_data.json', '.'))
+if os.path.exists('ui'):
+    datas.append(('ui', 'ui'))
+
+try:
+    datas += collect_data_files('PySide6')
+except Exception:
+    pass
 
 # Collect pdfplumber data files
 try:
@@ -45,6 +52,16 @@ try:
     webdriver_manager_submodules = collect_submodules('webdriver_manager')
 except Exception:
     webdriver_manager_submodules = []
+
+try:
+    pyside6_submodules = collect_submodules('PySide6')
+except Exception:
+    pyside6_submodules = []
+
+try:
+    ui_qt_submodules = collect_submodules('ui_qt')
+except Exception:
+    ui_qt_submodules = []
 
 try:
     sklearn_submodules = collect_submodules('sklearn')
@@ -149,7 +166,14 @@ hidden_imports = [
     'ui.pdf_review_tab',
     'sklearn',
     'sklearn.cluster',
-] + pandas_submodules + selenium_submodules + webdriver_manager_submodules + sklearn_submodules
+    'PySide6',
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    'ui_qt',
+    'ui_qt.main_window',
+    'ui_qt.theme',
+] + pandas_submodules + selenium_submodules + webdriver_manager_submodules + sklearn_submodules + pyside6_submodules + ui_qt_submodules
 
 a = Analysis(
     ['main.py'],

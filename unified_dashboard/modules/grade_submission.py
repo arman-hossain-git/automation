@@ -609,29 +609,75 @@ class GradeSubmitter:
                     if student_tab_xpath:
                         safe_click(driver, wait, student_tab_xpath, "Students tab", log_func=self._log)
 
-                    # Poll for the SPECIFIC student ID to appear in a list's text (up to 2.5s).
-                    # Checks learning-engine-preferred list first so repeat students resolve faster.
-                    # By waiting for the student's own text — not just any content — we guarantee
-                    # that select_student_row's is_displayed() check will succeed.
-                    _tab_poll_end = time.time() + 2.5
+                    # Poll for the student ID to appear in a list category.
+                    # Under heavy parallel worker load, AJAX responses can take several seconds to render.
+                    # We check textContent/innerText (immune to scroll/hidden state), direct XPath matching,
+                    # and allow sufficient time (derived from max_action_wait_seconds, min 10s).
+                    sid_str = str(student_id).strip()
+                    poll_timeout = max(10.0, float(settings.get("max_action_wait_seconds", 20)))
+                    _tab_poll_end = time.time() + poll_timeout
+                    _tab_reclicked = False
+
                     while time.time() < _tab_poll_end and not category_found:
                         for cat, list_xpath, edit_xpath in ordered_lists:
                             try:
                                 _lx_elems = driver.find_elements(By.XPATH, list_xpath)
-                                if _lx_elems and student_id in (_lx_elems[0].text or ''):
+                                if not _lx_elems:
+                                    continue
+
+                                # 1. Fast text check: inspect textContent & innerText across all matching elements
+                                _combined_text = ' '.join(
+                                    (el.get_attribute("textContent") or el.get_attribute("innerText") or el.text or '')
+                                    for el in _lx_elems
+                                )
+                                if sid_str in _combined_text:
+                                    category_found = cat
+                                    target_list_xpath = list_xpath
+                                    target_edit_xpath = edit_xpath
+                                    break
+
+                                # 2. Scoped XPath check: directly match candidate elements inside list container
+                                _row_matches = driver.find_elements(
+                                    By.XPATH,
+                                    f"{list_xpath}//*[contains(normalize-space(.), '{sid_str}')]"
+                                )
+                                if _row_matches:
                                     category_found = cat
                                     target_list_xpath = list_xpath
                                     target_edit_xpath = edit_xpath
                                     break
                             except Exception:
                                 pass
+
                         if not category_found:
-                            time.sleep(0.1)
+                            # Re-click Students tab once after 3.5s if initial AJAX click was swallowed
+                            if not _tab_reclicked and time.time() > (_tab_poll_end - poll_timeout + 3.5) and student_tab_xpath:
+                                try:
+                                    safe_click(driver, wait, student_tab_xpath, "Students tab (retry)", log_func=self._log)
+                                    _tab_reclicked = True
+                                except Exception:
+                                    pass
+                            time.sleep(0.15)
+
+                    # 3. Page-wide fallback: if student ID is present on the page, proceed instead of failing
+                    if not category_found:
+                        try:
+                            _page_matches = driver.find_elements(
+                                By.XPATH,
+                                f"//*[contains(normalize-space(.), '{sid_str}') and not(.//*[contains(normalize-space(.), '{sid_str}')])]"
+                            )
+                            if _page_matches:
+                                self._log('info', f"[FALLBACK] Student {sid_str} found on page — proceeding with 'Regular' list.")
+                                category_found = "Regular"
+                                target_list_xpath = config.get("regular_student_list_xpath", "")
+                                target_edit_xpath = config.get("edit_regular_xpath", "")
+                        except Exception:
+                            pass
 
                     if not category_found:
                         raise Exception(
                             f"Student ID {student_id} not located in Regular, Waiting, or Withdrawn list "
-                            f"within 2.5s of clicking Students tab."
+                            f"within {poll_timeout:.1f}s of clicking Students tab."
                         )
 
                     self._log('info', f"Located student {student_id} in '{category_found}' list.")

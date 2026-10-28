@@ -100,6 +100,11 @@ class LearningUI(tk.Frame):
         self._notebook.add(self._tab_devtools, text=" 🛠 DevTools Requirements ")
         self._build_devtools_tab()
 
+        # Tab 5: PDF Presets
+        self._tab_pdf = tk.Frame(self._notebook, bg=BG_CARD)
+        self._notebook.add(self._tab_pdf, text=" 📄 PDF Preset Learning ")
+        self._build_pdf_tab()
+
         # --- Action Buttons ---
         btn_bar = tk.Frame(self, bg=BG_MAIN)
         btn_bar.pack(fill="x", padx=20, pady=(0, 12))
@@ -123,9 +128,10 @@ class LearningUI(tk.Frame):
     def _make_kpi_tile(self, parent, icon: str, label: str, value: str, color: str) -> tk.Frame:
         tile = tk.Frame(parent, bg=BG_CARD, bd=1, relief="solid", padx=10, pady=8)
         tk.Label(tile, text=icon, font=(FONT_BODY[0], 18), fg=color, bg=BG_CARD).pack()
-        tile._value_label = tk.Label(tile, text=value, font=(FONT_BODY[0], 16, "bold"),
-                                     fg=color, bg=BG_CARD)
-        tile._value_label.pack()
+        val_lbl = tk.Label(tile, text=value, font=(FONT_BODY[0], 16, "bold"),
+                           fg=color, bg=BG_CARD)
+        val_lbl.pack()
+        setattr(tile, "_value_label", val_lbl)
         tk.Label(tile, text=label, font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD).pack()
         return tile
 
@@ -283,6 +289,56 @@ class LearningUI(tk.Frame):
                 info.get("last_updated", "—"),
             ))
 
+    def _build_pdf_tab(self):
+        tk.Label(
+            self._tab_pdf,
+            text="Field-level confidence and tuning history learned from random document reviews.",
+            font=FONT_BODY, fg=TEXT_SECONDARY, bg=BG_CARD, anchor="w", wraplength=900, justify="left"
+        ).pack(fill="x", padx=8, pady=(8, 4))
+
+        frame = tk.Frame(self._tab_pdf, bg=BG_CARD)
+        frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        cols = ("Preset Name", "Verified Runs", "Fields Tracked", "Avg Confidence", "Last Tuned Field")
+        self._pdf_tree = ttk.Treeview(
+            frame, columns=cols, show="headings",
+            style="Learning.Treeview", selectmode="browse"
+        )
+        for col, width in zip(cols, (200, 100, 110, 110, 180)):
+            self._pdf_tree.heading(col, text=col)
+            self._pdf_tree.column(col, width=width, minwidth=60, anchor="center")
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=self._pdf_tree.yview)
+        self._pdf_tree.configure(yscrollcommand=vsb.set)
+        self._pdf_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+    def _load_pdf_profiles(self):
+        for row in self._pdf_tree.get_children():
+            self._pdf_tree.delete(row)
+
+        profiles = learning_engine._data.get("pdf_extractor_profiles", {})
+        if not profiles:
+            self._pdf_tree.insert("", "end", values=(
+                "No PDF profiles learned yet. Use 'Review & Self-Tune' tab.", "", "", "", ""
+            ))
+            return
+
+        for name, info in sorted(profiles.items()):
+            conf_map = info.get("field_confidence", {})
+            avg_conf = f"{sum(conf_map.values()) / len(conf_map) * 100:.0f}%" if conf_map else "--"
+            history = info.get("tuning_history", [])
+            last_tuned = history[-1].get("field", "—") if history else "—"
+            self._pdf_tree.insert("", "end", values=(
+                name,
+                info.get("verified_runs", 0),
+                len(conf_map),
+                avg_conf,
+                last_tuned
+            ))
+
     # ------------------------------------------------------------------
     # Data Loading & Refresh
     # ------------------------------------------------------------------
@@ -309,6 +365,7 @@ class LearningUI(tk.Frame):
         self._load_domains()
         self._load_students()
         self._load_devtools()
+        self._load_pdf_profiles()
 
     def _load_history(self):
         # Clear

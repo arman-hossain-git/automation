@@ -146,7 +146,7 @@ class HomeUI(tk.Frame):
             fg=accent_color, bg=BG_CARD, anchor="w"
         )
         val_label.pack(fill="x", pady=(12, 4))
-        card._val_label = val_label
+        setattr(card, "_val_label", val_label)
 
         # Subtitle / Description
         lbl_desc = tk.Label(

@@ -38,7 +38,7 @@ class StatusBadge(QFrame):
 
         self.set_variant(variant, text)
 
-    def set_variant(self, variant: str, text: str = None):
+    def set_variant(self, variant: str, text: str | None = None):
         if text is not None:
             self.lbl_text.setText(text)
 

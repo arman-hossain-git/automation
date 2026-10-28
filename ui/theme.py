@@ -86,7 +86,7 @@ LIGHT_PALETTE = {
 }
 
 
-def get_effective_theme_mode(mode: str = None) -> str:
+def get_effective_theme_mode(mode: str | None = None) -> str:
     """Resolves 'system', 'dark', or 'light' into either 'dark' or 'light'."""
     if not mode:
         try:
@@ -103,7 +103,7 @@ def get_effective_theme_mode(mode: str = None) -> str:
         return "dark"
 
 
-def get_active_palette(mode: str = None) -> dict:
+def get_active_palette(mode: str | None = None) -> dict:
     """Returns the color palette dict for the active theme."""
     eff = get_effective_theme_mode(mode)
     return LIGHT_PALETTE if eff == "light" else DARK_PALETTE
@@ -166,7 +166,7 @@ def bind_hover_effect(btn, normal_bg, hover_bg, normal_fg="white", hover_fg="whi
     btn.bind("<Leave>", _on_leave)
 
 
-def apply_notebook_style(mode: str = None):
+def apply_notebook_style(mode: str | None = None):
     """Apply high-contrast theme styling to TTK Notebook, Treeview, Scrollbars, and Combobox widgets."""
     style = ttk.Style()
     try:
@@ -267,7 +267,7 @@ def apply_notebook_style(mode: str = None):
 
     # Configure Option Database for Tk Combobox popup listbox
     try:
-        root = tk._default_root
+        root = getattr(tk, "_default_root", None)
         if root:
             root.option_add("*TCombobox*Listbox*background", colors['BG_CARD_ALT'])
             root.option_add("*TCombobox*Listbox*foreground", colors['TEXT_PRIMARY'])
@@ -282,7 +282,7 @@ def apply_notebook_style(mode: str = None):
     return style
 
 
-def apply_theme(mode: str = None):
+def apply_theme(mode: str | None = None):
     """Updates dynamic theme variables in theme.py and across all loaded ui.* modules."""
     palette = get_active_palette(mode)
 
@@ -301,7 +301,7 @@ def apply_theme(mode: str = None):
     return apply_notebook_style(mode)
 
 
-def update_widget_tree_colors(widget, mode: str = None):
+def update_widget_tree_colors(widget, mode: str | None = None):
     """Recursively updates all widget colors in the given hierarchy to match active theme palette."""
     palette = get_active_palette(mode)
     apply_theme(mode)

@@ -19,7 +19,7 @@ import urllib.parse
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
@@ -699,11 +699,58 @@ def select_student_row(
     timeout: float = 10,
     log_func=None,
 ):
-    """Click the student row for *student_id* inside the given list container."""
+    """Select the student item or click the student row for *student_id* inside the given list container.
+    Supports:
+      1. <select> listboxes / dropdowns (sets option.selected, select.value, and dispatches events).
+      2. Table rows with checkboxes or radio buttons (ensures checked state).
+      3. Clickable table rows (tr/td/div with onclick or class styling).
+    """
     _log = log_func or (lambda l, m: None)
+    sid_str = str(student_id).strip()
+
+    # 1. Direct <select> container handling
+    if list_xpath:
+        try:
+            select_containers = driver.find_elements(By.XPATH, list_xpath)
+            for sc in select_containers:
+                if sc.tag_name.lower() == "select":
+                    sel = Select(sc)
+                    for opt in sel.options:
+                        opt_text = opt.text or ""
+                        opt_val = opt.get_attribute("value") or ""
+                        if sid_str in opt_text or sid_str in opt_val:
+                            try:
+                                sel.select_by_value(opt_val)
+                            except Exception:
+                                try:
+                                    sel.select_by_visible_text(opt_text)
+                                except Exception:
+                                    pass
+                            driver.execute_script("""
+                                var opt = arguments[0];
+                                var sel = arguments[1];
+                                opt.selected = true;
+                                sel.value = opt.value;
+                                sel.selectedIndex = opt.index;
+                                sel.dispatchEvent(new Event('focus', { bubbles: true }));
+                                sel.dispatchEvent(new Event('change', { bubbles: true }));
+                                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                                if (sel.onchange) { try { sel.onchange(); } catch(e){} }
+                                if (sel.onclick) { try { sel.onclick(); } catch(e){} }
+                                if (opt.onclick) { try { opt.onclick(); } catch(e){} }
+                                opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                                opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                                opt.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                            """, opt, sc)
+                            _log('info', f"Selected student {student_id} in '{category_label}' <select> container (option value='{opt_val}').")
+                            time.sleep(0.2)
+                            return opt
+        except Exception:
+            pass
+
     row_xpath = (
-        f"{list_xpath}//*[contains(normalize-space(.), '{student_id}') "
-        f"and not(.//*[contains(normalize-space(.), '{student_id}')])]"
+        f"{list_xpath}//*[contains(normalize-space(.), '{sid_str}') "
+        f"and not(.//*[contains(normalize-space(.), '{sid_str}')])]"
     )
     last_exception = None
     end_time = time.time() + timeout
@@ -711,16 +758,50 @@ def select_student_row(
         try:
             candidates = driver.find_elements(By.XPATH, row_xpath)
             if not candidates and list_xpath:
-                # Fallback: search anywhere on page if container-scoped search yielded nothing
                 candidates = driver.find_elements(
                     By.XPATH,
-                    f"//*[contains(normalize-space(.), '{student_id}') "
-                    f"and not(.//*[contains(normalize-space(.), '{student_id}')])]"
+                    f"//*[contains(normalize-space(.), '{sid_str}') "
+                    f"and not(.//*[contains(normalize-space(.), '{sid_str}')])]"
                 )
+
+            # Option tag special check: options inside a <select> might not be considered visible by Selenium
+            opt_candidates = [c for c in candidates if c.tag_name.lower() == "option"]
+            if opt_candidates:
+                opt_elem = opt_candidates[0]
+                try:
+                    parent_sel = opt_elem.find_element(By.XPATH, "./ancestor::select")
+                    sel = Select(parent_sel)
+                    opt_val = opt_elem.get_attribute("value") or ""
+                    try:
+                        sel.select_by_value(opt_val)
+                    except Exception:
+                        sel.select_by_visible_text(opt_elem.text)
+                except Exception:
+                    pass
+                driver.execute_script("""
+                    var opt = arguments[0];
+                    var sel = opt.closest('select');
+                    if (sel) {
+                        opt.selected = true;
+                        sel.value = opt.value;
+                        sel.selectedIndex = opt.index;
+                        sel.dispatchEvent(new Event('focus', { bubbles: true }));
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        sel.dispatchEvent(new Event('input', { bubbles: true }));
+                        if (sel.onchange) { try { sel.onchange(); } catch(e){} }
+                        if (sel.onclick) { try { sel.onclick(); } catch(e){} }
+                        if (opt.onclick) { try { opt.onclick(); } catch(e){} }
+                        opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        opt.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                    }
+                """, opt_elem)
+                _log('info', f"Selected student {student_id} in '{category_label}' list (<option> selected).")
+                time.sleep(0.2)
+                return opt_elem
 
             visible = [c for c in candidates if c.is_displayed()]
             if not visible and candidates:
-                # Element exists in DOM but may be scrolled out of view or in an overflow container
                 try:
                     driver.execute_script(
                         "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
@@ -730,7 +811,6 @@ def select_student_row(
                     if candidates[0].is_displayed():
                         visible = [candidates[0]]
                     else:
-                        # Fallback to candidates[0] for JS click even if Selenium visibility heuristic is False
                         visible = [candidates[0]]
                 except Exception:
                     pass
@@ -738,7 +818,33 @@ def select_student_row(
             if not visible:
                 time.sleep(0.15)
                 continue
+
             row_elem = visible[0]
+
+            # If inside table row, check for checkbox or radio button
+            try:
+                cb_inputs = row_elem.find_elements(
+                    By.XPATH,
+                    ".//input[@type='checkbox' or @type='radio'] | "
+                    "./ancestor::tr[1]//input[@type='checkbox' or @type='radio'] | "
+                    "./preceding-sibling::td//input[@type='checkbox' or @type='radio']"
+                )
+                for cb in cb_inputs:
+                    if not cb.is_selected():
+                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cb)
+                        try:
+                            cb.click()
+                        except Exception:
+                            driver.execute_script("""
+                                arguments[0].checked = true;
+                                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                if (arguments[0].onclick) { try { arguments[0].onclick(); } catch(e){} }
+                            """, cb)
+                        _log('info', f"Checked selection checkbox/radio for student {student_id}.")
+            except Exception:
+                pass
+
             onclick_code = row_elem.get_attribute("onclick")
             onclick_target = row_elem
             if not onclick_code:
@@ -1046,12 +1152,8 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
     ]
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
-    snapshot = {
-        'files': [],
-        'by_name': {},
-        'count': 0,
-        'timestamp': time.time(),
-    }
+    files_list: list[dict] = []
+    by_name_map: dict[str, dict] = {}
 
     end_time = time.time() + wait_timeout
     rows = []
@@ -1124,22 +1226,27 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
                             'row': row,
                             'element': el,
                         }
-                        snapshot['files'].append(entry)
+                        files_list.append(entry)
                         for ck in clean_keys:
-                            snapshot['by_name'][ck] = entry
+                            by_name_map[ck] = entry
             except Exception:
                 pass
     except Exception:
         pass
 
-    snapshot['count'] = len(snapshot['files'])
+    snapshot = {
+        'files': files_list,
+        'by_name': by_name_map,
+        'count': len(files_list),
+        'timestamp': time.time(),
+    }
     return snapshot
 
 
 def get_portal_table_snapshot_adaptive(
     driver,
     config: dict,
-    expected_filenames: list[str] = None,
+    expected_filenames: list[str] | None = None,
     max_timeout: float = 4.0,
     poll_interval: float = 0.25,
     log_func=None,
@@ -1368,9 +1475,9 @@ def file_exists_in_listing(
     driver,
     file_name: str,
     config: dict,
-    upload_name: str = None,
-    local_path: str = None,
-    table_snapshot: dict = None,
+    upload_name: str | None = None,
+    local_path: str | None = None,
+    table_snapshot: dict | None = None,
     log_func=None
 ) -> bool:
     """Check whether *file_name* (or *upload_name*) already appears in the CURRENT folder's

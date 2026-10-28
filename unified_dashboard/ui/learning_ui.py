@@ -128,9 +128,10 @@ class LearningUI(tk.Frame):
     def _make_kpi_tile(self, parent, icon: str, label: str, value: str, color: str) -> tk.Frame:
         tile = tk.Frame(parent, bg=BG_CARD, bd=1, relief="solid", padx=10, pady=8)
         tk.Label(tile, text=icon, font=(FONT_BODY[0], 18), fg=color, bg=BG_CARD).pack()
-        tile._value_label = tk.Label(tile, text=value, font=(FONT_BODY[0], 16, "bold"),
-                                     fg=color, bg=BG_CARD)
-        tile._value_label.pack()
+        val_lbl = tk.Label(tile, text=value, font=(FONT_BODY[0], 16, "bold"),
+                           fg=color, bg=BG_CARD)
+        val_lbl.pack()
+        setattr(tile, "_value_label", val_lbl)
         tk.Label(tile, text=label, font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD).pack()
         return tile
 

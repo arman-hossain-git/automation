@@ -36,6 +36,7 @@ class GradeUI(BaseToolFrame):
         self.csv_path = ""
         self.devtools_var = tk.BooleanVar(value=settings.get("auto_open_devtools", False))
         self.sub_feature = "submit"  # "submit" or "unsubmit"
+        self.total_students = 0
 
         self.submitter = GradeSubmitter()
         self._populate_inputs()
@@ -159,9 +160,10 @@ class GradeUI(BaseToolFrame):
         if self.sub_feature == "submit":
             self.guide_header.config(text="🎓  ACTIVE SUB-FEATURE: SUBMIT FINAL GRADES & SCORES", fg=ACCENT_INFO)
             self.guide_body.config(
-                text="• CSV Requirements: Must include studentId, link, finalGradeReceivedDate, and score (optional grade).\n"
-                     "• Action: Locates student record, opens Edit Status modal, sets Final Grade Received to 'Yes',\n"
-                     "  inputs date, fills Adjust Score / Grade dropdown, and submits changes."
+                text="• CSV Requirements: Must include studentId and link. finalGradeReceivedDate, score, and grade are all optional.\n"
+                     "• Action: Locates student record, opens Edit Status modal, sets Final Grade Received to 'Yes'\n"
+                     "  (when date is provided), inputs date, fills Adjust Score / Grade dropdown (when score/grade is provided), and submits.\n"
+                     "• No grade or score? Only the Edit Status modal is opened and submitted — nothing else."
             )
             self.lbl_csv_picker.config(text="Grade Links CSV (.csv):")
         else:
@@ -174,7 +176,7 @@ class GradeUI(BaseToolFrame):
             )
             self.lbl_csv_picker.config(text="Student Links CSV (.csv):")
 
-    def get_task_from_inputs(self, silent: bool = False) -> QueueTask:
+    def get_task_from_inputs(self, silent: bool = False) -> QueueTask | None:
         if not self.cred_path or not self.csv_path:
             if not silent:
                 messagebox.showerror("Missing Fields", "Please select Credentials and Links CSV file.")
@@ -234,8 +236,9 @@ class GradeUI(BaseToolFrame):
     def _handle_progress(self, data: dict):
         t = data.get('type')
         if t == 'total':
-            self.set_progress(0, data['total'])
-            self.update_kpis(total_students=data['total'])
+            self.total_students = data.get('total', 0)
+            self.set_progress(0, self.total_students)
+            self.update_kpis(total_students=self.total_students)
         elif t == 'item_start':
             self.update_status(f"Processing row {data['idx']+1}/{self.total_students} (Student {data['student_id']})...")
             self.update_kpis(

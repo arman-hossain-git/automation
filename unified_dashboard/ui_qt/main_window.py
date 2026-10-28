@@ -48,7 +48,7 @@ class NavItem(QFrame):
         self.sub_container: "QFrame | None" = None
 
         self.setObjectName("NavItem")
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._apply_style(active=False)
 
         layout = QHBoxLayout(self)
@@ -57,7 +57,7 @@ class NavItem(QFrame):
 
         self.lbl_icon = QLabel(icon)
         self.lbl_icon.setStyleSheet(f"font-size: 18px; background: transparent; border: none; min-width: 24px;")
-        self.lbl_icon.setAlignment(Qt.AlignCenter)
+        self.lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.lbl_icon)
 
         text_box = QVBoxLayout()
@@ -134,7 +134,7 @@ class SubNavItem(QFrame):
         super().__init__(parent)
         self.sub_id = sub_id
         self.setObjectName("SubNavItem")
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"""
             QFrame#SubNavItem {{
                 background-color: {BG_CARD_ALT};
@@ -189,7 +189,7 @@ class LazyViewDict(dict):
         self._main_window = main_window
         self._registered_keys = {
             "home", "file_exporter", "file_uploader",
-            "grades", "pdf_extractor", "learning",
+            "grades", "student_removal", "field_updater", "pdf_extractor", "data_harmonizer", "learning",
             "documentation", "settings"
         }
 
@@ -340,10 +340,28 @@ class MainWindow(QMainWindow):
                 "subtitle": "Submit or un-submit final grades",
             },
             {
+                "id": "student_removal",
+                "icon": "🗑️",
+                "title": "Student Removal",
+                "subtitle": "Remove students from class & save",
+            },
+            {
+                "id": "field_updater",
+                "icon": "✏️",
+                "title": "Field Updater",
+                "subtitle": "Bulk-update page fields from a CSV",
+            },
+            {
                 "id": "pdf_extractor",
                 "icon": "🧾",
                 "title": "PDF → Excel Extractor",
                 "subtitle": "Batch-convert PDFs to workbook",
+            },
+            {
+                "id": "data_harmonizer",
+                "icon": "🔄",
+                "title": "Data Harmonizer",
+                "subtitle": "Multi-dataset adaptive formatter",
             },
             {
                 "id": "learning",
@@ -426,7 +444,10 @@ class MainWindow(QMainWindow):
             "file_exporter": lambda: __import__("ui_qt.views.file_exporter_view", fromlist=["FileExporterView"]).FileExporterView(),
             "file_uploader": lambda: __import__("ui_qt.views.file_uploader_view", fromlist=["FileUploaderView"]).FileUploaderView(),
             "grades": lambda: __import__("ui_qt.views.grade_view", fromlist=["GradeView"]).GradeView(),
+            "student_removal": lambda: __import__("ui_qt.views.student_removal_view", fromlist=["StudentRemovalView"]).StudentRemovalView(),
+            "field_updater": lambda: __import__("ui_qt.views.field_updater_view", fromlist=["FieldUpdaterView"]).FieldUpdaterView(),
             "pdf_extractor": lambda: __import__("ui_qt.views.pdf_extractor_view", fromlist=["PdfExtractorView"]).PdfExtractorView(),
+            "data_harmonizer": lambda: __import__("ui_qt.views.data_harmonizer_view", fromlist=["DataHarmonizerView"]).DataHarmonizerView(),
             "learning": lambda: __import__("ui_qt.views.learning_view", fromlist=["LearningView"]).LearningView(),
             "documentation": lambda: __import__("ui_qt.views.documentation_view", fromlist=["DocumentationView"]).DocumentationView(),
             "settings": lambda: __import__("ui_qt.views.settings_view", fromlist=["SettingsView"]).SettingsView(),

@@ -53,8 +53,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
-from core.chrome_driver import launch_chrome_driver, build_download_options
+from core.chrome_driver import launch_chrome_driver, build_download_options, safe_quit_driver
 from core.selenium_helpers import (
     set_download_behavior,
     wait_for_downloads_to_finish,
@@ -296,6 +297,8 @@ class FileExporter:
 
             self._on_progress({'type': 'total', 'total': len(students)})
 
+            relaunch_budget = 3  # max automatic Chrome relaunches per run
+
             for idx, student in enumerate(students):
                 if self._abort():
                     self._log('warning', "Abort requested — halting export.")
@@ -313,16 +316,45 @@ class FileExporter:
 
                 t_nav = time.time()
                 try:
-                    driver.get(link)
+                    try:
+                        driver.set_page_load_timeout(45)
+                    except Exception:
+                        pass
+                    try:
+                        driver.get(link)
+                    except TimeoutException:
+                        self._log('warning',
+                                  f"Page load timed out (45s) for {student_id}; "
+                                  f"stopping page load and proceeding with partial page...")
+                        try:
+                            driver.execute_script("window.stop();")
+                        except Exception:
+                            pass
                     wait_for_page_ready(driver, timeout=15)
                 except Exception as nav_err:
-                    if not self._session_alive(driver):
+                    is_dead = not self._session_alive(driver)
+                    if is_dead and relaunch_budget > 0 and not self._abort():
+                        recovered = self._try_recover_session(
+                            driver, nav_err, None, download_dir_abs, login_url, config, relaunch_budget
+                        )
+                        if recovered:
+                            driver, wait, main_window, relaunch_budget = recovered
+                            self._log('warning',
+                                      f"Recovered from crash before reaching {student_id}; "
+                                      f"skipping this record and continuing.")
+                            self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
+                            continue
+                        else:
+                            self._log('error', "Could not recover browser session -- stopping the run.")
+                            break
+                    elif is_dead:
                         self._log('error',
                                   f"Browser session crashed before reaching {student_id}: {nav_err}. "
-                                  f"Stopping the run -- please re-run to pick up where this left off.")
+                                  f"No relaunch budget remaining -- stopping.")
                         break
-                    self._log('error', f"Could not load {student_id}'s page: {nav_err} -- skipping.")
-                    continue
+                    else:
+                        self._log('error', f"Could not load {student_id}'s page: {nav_err} -- skipping.")
+                        continue
 
                 if self._is_on_login_page(driver, config, settle_timeout=4.0):
                     self._log_login_page_diagnostics(driver, config, student_id, 'initial')
@@ -393,12 +425,26 @@ class FileExporter:
                             download_dir_abs, allow_duplicates, filters, main_window, link
                         )
                     except Exception as proc_err:
-                        if not self._session_alive(driver):
+                        is_dead = not self._session_alive(driver)
+                        if is_dead and relaunch_budget > 0 and not self._abort():
+                            recovered = self._try_recover_session(
+                                driver, proc_err, None, download_dir_abs, login_url, config, relaunch_budget
+                            )
+                            if recovered:
+                                driver, wait, main_window, relaunch_budget = recovered
+                                self._log('warning',
+                                          f"Recovered from crash during {student_id}; skipping this record.")
+                                continue
+                            else:
+                                self._log('error', "Could not recover browser session -- stopping the run.")
+                                break
+                        elif is_dead:
                             self._log('error',
                                       f"Browser session crashed while processing {student_id}: {proc_err}. "
-                                      f"Stopping the run -- please re-run to pick up where this left off.")
+                                      f"No relaunch budget remaining -- stopping.")
                             break
-                        self._log('error', f"Unexpected error processing {student_id}: {proc_err}")
+                        else:
+                            self._log('error', f"Unexpected error processing {student_id}: {proc_err}")
 
                 # --- Automatic tab traversal -----------------------------------
                 # OPT-IN (see 'scan_all_tabs' above). A student's profile is a
@@ -817,9 +863,10 @@ class FileExporter:
             wait_for_page_ready(new_driver, timeout=15)
         return new_driver, new_wait, new_main_window
 
-    def _try_recover_session(self, err, chrome_options, download_dir_abs: str, login_url: str,
-                              config: dict, relaunch_budget: int):
-        """On a dead browser session, attempt one relaunch if budget remains.
+    def _try_recover_session(self, old_driver, err, chrome_options, download_dir_abs: str,
+                              login_url: str, config: dict, relaunch_budget: int):
+        """On a dead browser session, quit the old driver, then attempt one
+        relaunch if budget remains.
         Returns (driver, wait, main_window, new_budget) on success, or None
         if recovery isn't possible / budget exhausted (caller should stop the
         run)."""
@@ -827,10 +874,14 @@ class FileExporter:
             self._log('error', f"Browser session crashed: {err}. No relaunches left this run -- stopping.")
             return None
         try:
+            safe_quit_driver(old_driver)
+        except Exception:
+            pass
+        try:
             driver, wait, main_window = self._relaunch_driver(
                 chrome_options, download_dir_abs, login_url, config)
-            self._log('error',
-                      f"Browser session crashed: {err}. Recovered by relaunching Chrome -- "
+            self._log('warning',
+                      f"Browser session crashed ({err}). Recovered by relaunching Chrome -- "
                       f"skipping the record in progress and continuing with the next one "
                       f"({relaunch_budget - 1} relaunch(es) left this run).")
             return driver, wait, main_window, relaunch_budget - 1
@@ -1421,16 +1472,32 @@ class FileExporter:
                 folder_template, download_dir_abs, student_id, route, route, effective_name
             )
 
+            # ── Sync pre-flight: skip modal click if file already on disk.
+            expected_path = os.path.join(category_folder, effective_name)
+            if os.path.isfile(expected_path):
+                self._log('info',
+                    f"    [SYNC] '[GENERIC] {label}' already on disk — skipping.")
+                batch_logs.append({
+                    'studentId': student_id, 'fileName': label, 'fileType': 'PDF',
+                    'directory': category_folder, 'action': 'skipped',
+                    'actionComment': 'File already exists on disk',
+                    'validation': 'already_exists',
+                })
+                self._on_progress({'type': 'file_done', 'files_done': files_done})
+                continue
+
             self._log('info', f"    [GENERIC] Capturing '{label}' for {student_id} ({route})...")
             result = self._download_mypath_file(driver, btn, category_folder, effective_name, main_window)
-            download_ok = result in ('downloaded', 'duplicate')
+            download_ok = result in ('downloaded', 'updated', 'duplicate')
             if download_ok:
                 files_done += 1
 
             status, comment = {
-                'downloaded': ('downloaded', 'Success'),
-                'duplicate':  ('downloaded', 'Duplicate content already on disk'),
-                'failed':     ('failed',     'Could not retrieve generated file'),
+                'downloaded':    ('downloaded', 'Success'),
+                'updated':       ('downloaded', 'File updated — new version from source'),
+                'duplicate':     ('downloaded', 'Duplicate content already on disk'),
+                'already_exists':('skipped',   'File already on disk and unchanged (hash match)'),
+                'failed':        ('failed',     'Could not retrieve generated file'),
             }.get(result, ('failed', 'Unknown result'))
 
             batch_logs.append({
@@ -1492,15 +1559,20 @@ class FileExporter:
 
             file_ext = os.path.splitext(file_name)[1].replace('.', '').upper() or 'UNKNOWN'
 
+            # _force_download_via_fetch handles the sync check internally:
+            # it fetches the remote content, compares its hash to any existing
+            # disk file, and returns 'already_exists' / 'updated' / 'downloaded'.
             result = self._force_download_via_fetch(driver, href, category_folder, effective_disk_name)
-            download_ok = result in ('downloaded', 'duplicate')
+            download_ok = result in ('downloaded', 'updated', 'duplicate')
             if download_ok:
                 files_done += 1
 
             status, comment = {
-                'downloaded': ('downloaded', 'Success'),
-                'duplicate':  ('downloaded', 'Duplicate content already on disk'),
-                'failed':     ('failed',     'Extraction failed'),
+                'downloaded':    ('downloaded', 'Success'),
+                'updated':       ('downloaded', 'File updated — new version from source'),
+                'duplicate':     ('downloaded', 'Duplicate content already on disk'),
+                'already_exists':('skipped',   'File already on disk and unchanged (hash match)'),
+                'failed':        ('failed',     'Extraction failed'),
             }.get(result, ('failed', 'Unknown result'))
 
             batch_logs.append({
@@ -1943,20 +2015,47 @@ class FileExporter:
                     effective_disk_name = safe_check
 
                 file_ext = os.path.splitext(file_name)[1].replace('.', '').upper() or 'UNKNOWN'
+
+                # ── Sync pre-flight: skip the modal click entirely if this
+                # file already exists on disk. MyPath modal interactions are
+                # expensive (click → dialog → async URL poll → fetch), so we
+                # avoid all of that when the expected file is already present.
+                # Hash verification is delegated to the fetch path for
+                # static-link files; here we do a name-only check and trust
+                # that a file already at the correct path is up-to-date.
+                # (Delete the file manually to force a re-download.)
+                expected_path = os.path.join(category_folder, effective_disk_name)
+                if os.path.isfile(expected_path):
+                    self._log('info',
+                        f"    [SYNC] '{file_name}' already on disk — skipping download.")
+                    batch_logs.append({
+                        'studentId':     student_id,
+                        'fileName':      file_name,
+                        'fileType':      file_ext,
+                        'directory':     category_folder,
+                        'action':        'skipped',
+                        'actionComment': 'File already exists on disk',
+                        'validation':    'already_exists',
+                    })
+                    self._on_progress({'type': 'file_done', 'files_done': files_done})
+                    continue
+
                 self._log('info', f"    [{files_done+1}/{total_files}] '{file_name}' [{file_type}]")
 
                 # Download: click dialog-trigger -> capture URL from modal -> fetch bytes
                 result = self._download_mypath_file(
                     driver, btn_element, category_folder, effective_disk_name, main_window
                 )
-                download_ok = result in ('downloaded', 'duplicate')
+                download_ok = result in ('downloaded', 'updated', 'duplicate')
                 if download_ok:
                     files_done += 1
 
                 status, comment = {
-                    'downloaded': ('downloaded', 'Success'),
-                    'duplicate':  ('downloaded', 'Duplicate content already on disk'),
-                    'failed':     ('failed',     'Could not retrieve file from dialog'),
+                    'downloaded':    ('downloaded', 'Success'),
+                    'updated':       ('downloaded', 'File updated — new version from source'),
+                    'duplicate':     ('downloaded', 'Duplicate content already on disk'),
+                    'already_exists':('skipped',   'File already exists on disk (hash match)'),
+                    'failed':        ('failed',     'Could not retrieve file from dialog'),
                 }.get(result, ('failed', 'Unknown result'))
 
                 batch_logs.append({
@@ -2482,16 +2581,27 @@ class FileExporter:
 
         try:
             if os.path.exists(target_path):
-                if _file_content_hash(target_path) == _file_content_hash(downloaded_path):
+                downloaded_hash = _file_content_hash(downloaded_path)
+                if _file_content_hash(target_path) == downloaded_hash:
                     os.remove(downloaded_path)
                     self._log('info', f"Native download for '{file_name}' matched existing file; "
                                        f"removed duplicate.")
                     return 'duplicate'
                 base, ext = os.path.splitext(safe_name)
+                clean_base = re.sub(r'__\d+$', '', base)
                 counter = 1
-                while os.path.exists(target_path):
-                    target_path = os.path.join(folder_path, f"{base}__{counter + 1}{ext}")
+                while True:
                     counter += 1
+                    candidate_name = f"{clean_base}__{counter}{ext}"
+                    candidate_path = os.path.join(folder_path, candidate_name)
+                    if not os.path.exists(candidate_path):
+                        target_path = candidate_path
+                        break
+                    if _file_content_hash(candidate_path) == downloaded_hash:
+                        os.remove(downloaded_path)
+                        self._log('info', f"Native download for '{file_name}' matched existing version "
+                                           f"'{candidate_name}'; removed duplicate.")
+                        return 'duplicate'
             os.rename(downloaded_path, target_path)
         except Exception as e:
             self._log('warning', f"Could not rename native download '{downloaded_path}' to "
@@ -2920,13 +3030,31 @@ class FileExporter:
         self._close_modal_or_window(driver, main_window, switched_window)
 
         comment = {
-            'downloaded': 'Success',
-            'duplicate': 'Duplicate content already on disk',
-            'failed': 'Could not fetch generated PDF bytes',
+            'downloaded':    'Success',
+            'updated':       'File updated — new version from source',
+            'already_exists':'File already up-to-date on disk (hash match)',
+            'duplicate':     'Duplicate content already on disk',
+            'failed':        'Could not fetch generated PDF bytes',
         }.get(result, 'Unknown result')
         return result, comment
 
     def _force_download_via_fetch(self, driver, file_url: str, folder_path: str, file_name: str) -> str:
+        """Fetch *file_url* and save it to *folder_path/file_name*.
+
+        Return values
+        -------------
+        'downloaded'    — file written as a new file (did not exist on disk, or
+                          existed with an unmatched hash and saved as a new version).
+        'already_exists'— file existed and remote content is identical (hash match);
+                          disk unchanged.
+        'failed'        — could not fetch or write the file.
+
+        Note: 'duplicate' is still returned by the same-session within-run
+        dedup path (multiple items resolving to identical bytes in one run)
+        but is DISTINCT from 'already_exists' (file pre-existed from a prior
+        run). Callers that previously treated 'duplicate' as a success should
+        now also handle 'already_exists'.
+        """
         try:
             script = """
             const url = arguments[0];
@@ -2956,15 +3084,35 @@ class FileExporter:
 
             os.makedirs(folder_path, exist_ok=True)
             out_path = os.path.join(folder_path, safe_name)
+            remote_hash = hashlib.md5(file_bytes).hexdigest()
 
             if os.path.exists(out_path):
-                if _file_content_hash(out_path) == hashlib.md5(file_bytes).hexdigest():
-                    return 'duplicate'
+                # Check if the primary file matches the remote content hash
+                if _file_content_hash(out_path) == remote_hash:
+                    self._log('debug',
+                        f"[SYNC] '{safe_name}' already up-to-date on disk (hash match) — skipping.")
+                    return 'already_exists'
+
+                # If primary file has a different hash, check if any existing version matches
                 base, ext = os.path.splitext(safe_name)
+                clean_base = re.sub(r'__\d+$', '', base)
                 counter = 1
-                while os.path.exists(out_path):
-                    out_path = os.path.join(folder_path, f"{base}__{counter + 1}{ext}")
+                while True:
                     counter += 1
+                    candidate_name = f"{clean_base}__{counter}{ext}"
+                    candidate_path = os.path.join(folder_path, candidate_name)
+                    if not os.path.exists(candidate_path):
+                        # Unused version filename found for the new file
+                        out_path = candidate_path
+                        break
+                    if _file_content_hash(candidate_path) == remote_hash:
+                        self._log('debug',
+                            f"[SYNC] '{candidate_name}' already up-to-date on disk (hash match) — skipping.")
+                        return 'already_exists'
+
+                # Unmatched hash: do not overwrite existing file, treat as a new file
+                self._log('info',
+                    f"[SYNC] '{safe_name}' exists on disk with different hash — saving as new file '{os.path.basename(out_path)}'.")
 
             with open(out_path, 'wb') as out_f:
                 out_f.write(file_bytes)
@@ -2975,7 +3123,7 @@ class FileExporter:
 
     def _click_and_download(self, driver, element, folder_path: str, file_name: str, main_window: str) -> bool:
         result = self._force_download_via_fetch(driver, element.get_attribute('href') or '', folder_path, file_name)
-        return result in ('downloaded', 'duplicate')
+        return result in ('downloaded', 'already_exists', 'duplicate')
 
     def _process_generate_documents_mode(
         self, driver, wait, config, student_id, student_root_folder,
@@ -3047,13 +3195,19 @@ class FileExporter:
                     result, comment = self._generate_and_capture_document(
                         driver, config, btn, dest_folder, doc_label, main_window)
 
-                    if result in ('downloaded', 'duplicate'):
+                    if result in ('downloaded', 'updated', 'duplicate', 'already_exists'):
                         files_done += 1
                     else:
                         self._log('warning', f"'{doc_label}' unavailable for {student_id}: {comment}.")
 
                     self._on_progress({'type': 'file_done', 'files_done': files_done})
-                    status_map = {'downloaded': 'downloaded', 'duplicate': 'downloaded', 'failed': 'failed'}
+                    status_map = {
+                        'downloaded':    'downloaded',
+                        'updated':       'downloaded',
+                        'duplicate':     'downloaded',
+                        'already_exists':'skipped',
+                        'failed':        'failed',
+                    }
                     action_status = status_map.get(result, 'failed')
                     batch_logs.append({
                         'studentId': student_id, 'fileName': f"{doc_label}.pdf", 'fileType': 'PDF',

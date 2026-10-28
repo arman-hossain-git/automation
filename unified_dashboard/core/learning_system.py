@@ -46,6 +46,12 @@ DEFAULT_LEARNING_DATA = {
     "devtools_requirements": {},
     # preset_name -> { 'verified_runs': count, 'field_confidence': { field: score }, 'tuning_history': [...] }
     "pdf_extractor_profiles": {},
+    # data_harmonizer_profiles: learned column associations, composite rules, and verified fingerprints
+    "data_harmonizer_profiles": {
+        "column_associations": {},   # source_col -> { target_col: { 'confirmed': count, 'rejected': count } }
+        "composite_rules": {},       # target_col -> { 'columns': [...], 'rule': 'concat', 'confirmed': count }
+        "fingerprint_runs": {},      # src_fp:sample_fp -> { 'verified_runs': count, 'last_used': timestamp }
+    },
 }
 
 
@@ -68,6 +74,11 @@ class LearningEngine:
     """
 
     _instance = None
+    _lock: threading.RLock
+    _save_lock: threading.Lock
+    _last_save_time: float
+    _dirty: bool
+    _data: dict
 
     def __new__(cls):
         if cls._instance is None:
@@ -415,15 +426,20 @@ class LearningEngine:
     def record_run_summary(
         self,
         module_name: str,
-        total_items: int,
-        success_count: int,
-        total_files: int,
-        duration_sec: float,
+        total_items: int = 0,
+        success_count: int = 0,
+        total_files: int = 0,
+        duration_sec: float = 0.0,
+        **kwargs,
     ):
         """
         Append a completed run summary and update global counters.
         Call this at the end of every module run().
         """
+        if "total_count" in kwargs and not total_items:
+            total_items = kwargs["total_count"]
+        if "duration" in kwargs and not duration_sec:
+            duration_sec = kwargs["duration"]
         avg_speed = round(duration_sec / total_items, 2) if total_items > 0 else 0.0
         summary = {
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -484,6 +500,94 @@ class LearningEngine:
         """Return raw domain profiles for display in the Learning UI."""
         with self._lock:
             return dict(self._data.get("domain_profiles", {}))
+
+    # ------------------------------------------------------------------
+    # Data Harmonizer Adaptive Learning
+    # ------------------------------------------------------------------
+
+    def get_harmonizer_confidence(self, source_col: str, target_col: str) -> tuple[float, int]:
+        """Calculates learned confidence score [0.0, 1.0] and confirmation count for a column pair."""
+        with self._lock:
+            profiles = self._data.get("data_harmonizer_profiles", {})
+            associations = profiles.get("column_associations", {})
+            src_norm = str(source_col).strip().lower()
+            tgt_norm = str(target_col).strip().lower()
+
+            target_stats = associations.get(src_norm, {}).get(tgt_norm)
+            if not target_stats:
+                return 0.0, 0
+
+            confirmed = target_stats.get("confirmed", 0)
+            rejected = target_stats.get("rejected", 0)
+            total = confirmed + rejected
+            if total <= 0:
+                return 0.0, 0
+
+            confidence = confirmed / total
+            return float(confidence), int(confirmed)
+
+    def record_harmonizer_feedback(
+        self,
+        source_col: str,
+        target_col: str,
+        confirmed: bool = True,
+        rule: str = "direct",
+        params: dict | None = None
+    ):
+        """Records user confirmation or override for an adaptive column mapping."""
+        with self._lock:
+            profiles = self._data.setdefault("data_harmonizer_profiles", {})
+            associations = profiles.setdefault("column_associations", {})
+            src_norm = str(source_col).strip().lower()
+            tgt_norm = str(target_col).strip().lower()
+
+            target_map = associations.setdefault(src_norm, {})
+            stats = target_map.setdefault(tgt_norm, {"confirmed": 0, "rejected": 0, "rule": rule})
+
+            if confirmed:
+                stats["confirmed"] = stats.get("confirmed", 0) + 1
+                stats["rule"] = rule
+                if params:
+                    stats["params"] = params
+            else:
+                stats["rejected"] = stats.get("rejected", 0) + 1
+
+        self.save(force=True)
+
+    def record_harmonizer_run(
+        self,
+        source_fp: str,
+        sample_fp: str,
+        verified_mappings: list,
+        rows_processed: int = 0
+    ):
+        """Records a successful data harmonization run for adaptive fingerprint recognition."""
+        with self._lock:
+            profiles = self._data.setdefault("data_harmonizer_profiles", {})
+            fp_runs = profiles.setdefault("fingerprint_runs", {})
+            key = f"{source_fp}:{sample_fp}"
+            entry = fp_runs.setdefault(key, {"verified_runs": 0, "mappings": []})
+            entry["verified_runs"] = entry.get("verified_runs", 0) + 1
+            entry["last_used"] = datetime.datetime.now().isoformat()
+            entry["mappings"] = verified_mappings
+
+            self._data["total_runs"] = self._data.get("total_runs", 0) + 1
+            self._data["total_items_processed"] = self._data.get("total_items_processed", 0) + rows_processed
+
+        self.save(force=True)
+
+    def get_harmonizer_profile_stats(self) -> dict:
+        """Returns statistics on learned data harmonization profiles."""
+        with self._lock:
+            profiles = self._data.get("data_harmonizer_profiles", {})
+            assocs = profiles.get("column_associations", {})
+            total_associations = sum(len(tgts) for tgts in assocs.values())
+            fp_runs = profiles.get("fingerprint_runs", {})
+            return {
+                "total_learned_mappings": total_associations,
+                "recognized_fingerprints": len(fp_runs),
+                "profiles": profiles
+            }
 
     # ------------------------------------------------------------------
     # Reset

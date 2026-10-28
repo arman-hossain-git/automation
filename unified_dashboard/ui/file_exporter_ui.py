@@ -221,7 +221,7 @@ class FileExporterUI(BaseToolFrame):
     # Actions
     # ------------------------------------------------------------------
 
-    def get_task_from_inputs(self, silent: bool = False) -> QueueTask:
+    def get_task_from_inputs(self, silent: bool = False) -> QueueTask | None:
         if not self.cred_path or not self.links_path or not self.download_dir:
             if not silent:
                 messagebox.showerror(

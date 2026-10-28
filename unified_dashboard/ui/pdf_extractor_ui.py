@@ -1581,7 +1581,7 @@ class PdfExtractorUI(BaseToolFrame):
     # ======================================================================
     # Run (Start button)
     # ======================================================================
-    def get_task_from_inputs(self, silent: bool = False) -> QueueTask:
+    def get_task_from_inputs(self, silent: bool = False) -> QueueTask | None:
         if not self.source_folder or not os.path.isdir(self.source_folder):
             if not silent:
                 messagebox.showerror("Missing Folder", "Please select a source folder containing PDF files.")

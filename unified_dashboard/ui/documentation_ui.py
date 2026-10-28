@@ -108,6 +108,7 @@ update_xpath=
 adjust_score_xpath=
 grade_xpath=
 submit_xpath=
+save_class_xpath=
 regular_student_list_xpath=
 waiting_student_list_xpath=
 withdrawn_student_list_xpath=
@@ -175,6 +176,24 @@ student,link
 1001,https://pcr.example.com/StudentProfile.aspx?id=1001
 1002,https://pcr.example.com/StudentProfile.aspx?id=1002
 1003,https://pcr.example.com/StudentProfile.aspx?id=1003
+
+--------------------------------------------------------------------------------
+4. STUDENT REMOVAL CSV (for Student Removal Module)
+--------------------------------------------------------------------------------
+Required Columns:
+  • studentId (or id, student): Student identification string/number
+  • link (or url, classlink):   Direct URL to the class page containing the student list
+
+Action:
+  • Opens class page, clicks Students tab, locates student in Regular, Waiting, or Withdrawn list.
+  • Clicks Remove / Delete, confirms any alert or dialog, and saves the class to commit changes.
+  • Optimizes navigation by grouping rows by class link to eliminate redundant page loads.
+
+Example CSV Content:
+studentId,link
+1001,https://pcr.example.com/ClassProfile.aspx?id=501
+1002,https://pcr.example.com/ClassProfile.aspx?id=501
+1003,https://pcr.example.com/ClassProfile.aspx?id=502
 """
 
 DIRECTORY_STRUCTURE_EXPLANATION = """\

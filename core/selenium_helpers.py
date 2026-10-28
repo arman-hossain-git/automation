@@ -19,12 +19,13 @@ import urllib.parse
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     StaleElementReferenceException,
     NoSuchElementException,
+    TimeoutException,
 )
 
 from core.utils import file_content_hash, xpath_literal
@@ -593,7 +594,10 @@ def safe_click(
     last_exception = None
     for attempt in range(1, retries + 1):
         try:
-            elem = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+            elem = wait.until(
+                EC.presence_of_element_located((By.XPATH, xpath)),
+                message=f"Timed out waiting for '{description}' to appear (XPath: {xpath})",
+            )
             onclick_code = elem.get_attribute("onclick")
             if onclick_code:
                 try:
@@ -603,7 +607,10 @@ def safe_click(
                 except Exception:
                     _log('debug', f"Direct onclick invocation failed on {description}; falling back.")
 
-            elem = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+            elem = wait.until(
+                EC.element_to_be_clickable((By.XPATH, xpath)),
+                message=f"Timed out waiting for '{description}' to become clickable (XPath: {xpath})",
+            )
             driver.execute_script(
                 "arguments[0].scrollIntoView({block: 'center', inline: 'center'});", elem)
             time.sleep(0.12)
@@ -612,7 +619,22 @@ def safe_click(
                 return elem
             except ElementClickInterceptedException:
                 _log('debug', f"Native click intercepted on {description}; retrying with JS click.")
-                driver.execute_script("arguments[0].click();", elem)
+                try:
+                    driver.execute_script("arguments[0].click();", elem)
+                    return elem
+                except TimeoutException:
+                    _log('debug', f"JS click on {description} triggered navigation that hit renderer timeout; stopping pending assets.")
+                    try:
+                        driver.execute_script("window.stop();")
+                    except Exception:
+                        pass
+                    return elem
+            except TimeoutException:
+                _log('debug', f"Click on {description} triggered navigation that hit renderer timeout; stopping pending assets.")
+                try:
+                    driver.execute_script("window.stop();")
+                except Exception:
+                    pass
                 return elem
 
         except StaleElementReferenceException:
@@ -677,22 +699,152 @@ def select_student_row(
     timeout: float = 10,
     log_func=None,
 ):
-    """Click the student row for *student_id* inside the given list container."""
+    """Select the student item or click the student row for *student_id* inside the given list container.
+    Supports:
+      1. <select> listboxes / dropdowns (sets option.selected, select.value, and dispatches events).
+      2. Table rows with checkboxes or radio buttons (ensures checked state).
+      3. Clickable table rows (tr/td/div with onclick or class styling).
+    """
     _log = log_func or (lambda l, m: None)
+    sid_str = str(student_id).strip()
+
+    # 1. Direct <select> container handling
+    if list_xpath:
+        try:
+            select_containers = driver.find_elements(By.XPATH, list_xpath)
+            for sc in select_containers:
+                if sc.tag_name.lower() == "select":
+                    sel = Select(sc)
+                    for opt in sel.options:
+                        opt_text = opt.text or ""
+                        opt_val = opt.get_attribute("value") or ""
+                        if sid_str in opt_text or sid_str in opt_val:
+                            try:
+                                sel.select_by_value(opt_val)
+                            except Exception:
+                                try:
+                                    sel.select_by_visible_text(opt_text)
+                                except Exception:
+                                    pass
+                            driver.execute_script("""
+                                var opt = arguments[0];
+                                var sel = arguments[1];
+                                opt.selected = true;
+                                sel.value = opt.value;
+                                sel.selectedIndex = opt.index;
+                                sel.dispatchEvent(new Event('focus', { bubbles: true }));
+                                sel.dispatchEvent(new Event('change', { bubbles: true }));
+                                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                                if (sel.onchange) { try { sel.onchange(); } catch(e){} }
+                                if (sel.onclick) { try { sel.onclick(); } catch(e){} }
+                                if (opt.onclick) { try { opt.onclick(); } catch(e){} }
+                                opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                                opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                                opt.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                            """, opt, sc)
+                            _log('info', f"Selected student {student_id} in '{category_label}' <select> container (option value='{opt_val}').")
+                            time.sleep(0.2)
+                            return opt
+        except Exception:
+            pass
+
     row_xpath = (
-        f"{list_xpath}//*[contains(normalize-space(.), '{student_id}') "
-        f"and not(.//*[contains(normalize-space(.), '{student_id}')])]"
+        f"{list_xpath}//*[contains(normalize-space(.), '{sid_str}') "
+        f"and not(.//*[contains(normalize-space(.), '{sid_str}')])]"
     )
     last_exception = None
     end_time = time.time() + timeout
     while time.time() < end_time:
         try:
             candidates = driver.find_elements(By.XPATH, row_xpath)
+            if not candidates and list_xpath:
+                candidates = driver.find_elements(
+                    By.XPATH,
+                    f"//*[contains(normalize-space(.), '{sid_str}') "
+                    f"and not(.//*[contains(normalize-space(.), '{sid_str}')])]"
+                )
+
+            # Option tag special check: options inside a <select> might not be considered visible by Selenium
+            opt_candidates = [c for c in candidates if c.tag_name.lower() == "option"]
+            if opt_candidates:
+                opt_elem = opt_candidates[0]
+                try:
+                    parent_sel = opt_elem.find_element(By.XPATH, "./ancestor::select")
+                    sel = Select(parent_sel)
+                    opt_val = opt_elem.get_attribute("value") or ""
+                    try:
+                        sel.select_by_value(opt_val)
+                    except Exception:
+                        sel.select_by_visible_text(opt_elem.text)
+                except Exception:
+                    pass
+                driver.execute_script("""
+                    var opt = arguments[0];
+                    var sel = opt.closest('select');
+                    if (sel) {
+                        opt.selected = true;
+                        sel.value = opt.value;
+                        sel.selectedIndex = opt.index;
+                        sel.dispatchEvent(new Event('focus', { bubbles: true }));
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        sel.dispatchEvent(new Event('input', { bubbles: true }));
+                        if (sel.onchange) { try { sel.onchange(); } catch(e){} }
+                        if (sel.onclick) { try { sel.onclick(); } catch(e){} }
+                        if (opt.onclick) { try { opt.onclick(); } catch(e){} }
+                        opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        opt.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        opt.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                    }
+                """, opt_elem)
+                _log('info', f"Selected student {student_id} in '{category_label}' list (<option> selected).")
+                time.sleep(0.2)
+                return opt_elem
+
             visible = [c for c in candidates if c.is_displayed()]
+            if not visible and candidates:
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+                        candidates[0]
+                    )
+                    time.sleep(0.1)
+                    if candidates[0].is_displayed():
+                        visible = [candidates[0]]
+                    else:
+                        visible = [candidates[0]]
+                except Exception:
+                    pass
+
             if not visible:
                 time.sleep(0.15)
                 continue
+
             row_elem = visible[0]
+
+            # If inside table row, check for checkbox or radio button
+            try:
+                cb_inputs = row_elem.find_elements(
+                    By.XPATH,
+                    ".//input[@type='checkbox' or @type='radio'] | "
+                    "./ancestor::tr[1]//input[@type='checkbox' or @type='radio'] | "
+                    "./preceding-sibling::td//input[@type='checkbox' or @type='radio']"
+                )
+                for cb in cb_inputs:
+                    if not cb.is_selected():
+                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cb)
+                        try:
+                            cb.click()
+                        except Exception:
+                            driver.execute_script("""
+                                arguments[0].checked = true;
+                                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                if (arguments[0].onclick) { try { arguments[0].onclick(); } catch(e){} }
+                            """, cb)
+                        _log('info', f"Checked selection checkbox/radio for student {student_id}.")
+            except Exception:
+                pass
+
             onclick_code = row_elem.get_attribute("onclick")
             onclick_target = row_elem
             if not onclick_code:
@@ -1000,12 +1152,8 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
     ]
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
-    snapshot = {
-        'files': [],
-        'by_name': {},
-        'count': 0,
-        'timestamp': time.time(),
-    }
+    files_list: list[dict] = []
+    by_name_map: dict[str, dict] = {}
 
     end_time = time.time() + wait_timeout
     rows = []
@@ -1078,22 +1226,27 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
                             'row': row,
                             'element': el,
                         }
-                        snapshot['files'].append(entry)
+                        files_list.append(entry)
                         for ck in clean_keys:
-                            snapshot['by_name'][ck] = entry
+                            by_name_map[ck] = entry
             except Exception:
                 pass
     except Exception:
         pass
 
-    snapshot['count'] = len(snapshot['files'])
+    snapshot = {
+        'files': files_list,
+        'by_name': by_name_map,
+        'count': len(files_list),
+        'timestamp': time.time(),
+    }
     return snapshot
 
 
 def get_portal_table_snapshot_adaptive(
     driver,
     config: dict,
-    expected_filenames: list[str] = None,
+    expected_filenames: list[str] | None = None,
     max_timeout: float = 4.0,
     poll_interval: float = 0.25,
     log_func=None,
@@ -1322,9 +1475,9 @@ def file_exists_in_listing(
     driver,
     file_name: str,
     config: dict,
-    upload_name: str = None,
-    local_path: str = None,
-    table_snapshot: dict = None,
+    upload_name: str | None = None,
+    local_path: str | None = None,
+    table_snapshot: dict | None = None,
     log_func=None
 ) -> bool:
     """Check whether *file_name* (or *upload_name*) already appears in the CURRENT folder's
@@ -1419,16 +1572,43 @@ def file_exists_in_listing(
     return True
 
 
+def _wait_for_folder_navigation(driver, inside_xpath: str, folder_name: str, log_func=None, timeout: float = 3.0) -> bool:
+    """Poll up to *timeout* seconds to confirm that clicking a folder actually
+    navigated INSIDE it.  Success criterion: the folder link is no longer
+    visible in the listing table (because we are now viewing the folder's
+    own contents, not the parent listing).
+
+    Returns True if confirmed, False if timed out.
+    """
+    log = log_func or (lambda l, m: None)
+    _deadline = time.time() + timeout
+    while time.time() < _deadline:
+        time.sleep(0.15)
+        try:
+            els = driver.find_elements(By.XPATH, inside_xpath)
+            if not any(e.is_displayed() for e in els):
+                log('debug', f"[NAV-CONFIRM] Confirmed navigation inside '{folder_name}'.")
+                return True
+        except Exception:
+            pass
+    log('debug', f"[NAV-CONFIRM] Timed out waiting for navigation inside '{folder_name}'.")
+    return False
+
+
 def click_folder_by_name(driver, wait, folder_name: str, config: dict, description: str, log_func=None):
     """Click a folder link in a PCR listing matching *folder_name*.
     Guarantees STRICT EXACT MATCH (e.g. 'Official Transcripts' will NEVER match
     'DC-Official Transcripts' or 'Official Transcripts - 2024').
 
+    After clicking, waits up to 5 s to confirm that navigation INTO the folder
+    actually took place (the folder link disappears from the listing table).
+    If not confirmed, retries with JavaScript click. If still not confirmed after
+    3 attempts, raises an exception.
+
     IMPORTANT: Never uses unscoped XPaths that could match breadcrumb navigation links —
     those would navigate UP the hierarchy instead of INTO the folder.
     """
     log = log_func or (lambda l, m: None)
-    lit = xpath_literal(folder_name)
     folder_name_clean = " ".join(folder_name.replace('\xa0', ' ').strip().lower().split())
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
@@ -1436,18 +1616,30 @@ def click_folder_by_name(driver, wait, folder_name: str, config: dict, descripti
     # Non-breadcrumb guard: exclude links that are children of breadcrumb/nav elements
     _nav_guard = "not(ancestor::*[contains(@class,'breadcrumb') or contains(@class,'nav') or contains(@id,'breadcrumb') or contains(@id,'nav')])"
 
+    # Use strict equality XPaths (= instead of contains) to prevent prefix collisions
+    lit = xpath_literal(folder_name)
+    lit_lower = xpath_literal(folder_name.strip().lower())
     if scope:
-        candidate_xpaths = [
-            f"{scope}//a[contains(normalize-space(.), {lit})]",
-            f"{scope}//td[contains(normalize-space(.), {lit})]//a",
-            f"{scope}//span[contains(normalize-space(.), {lit})]",
+        strict_candidate_xpaths = [
+            f"{scope}//a[normalize-space(.) = {lit}]",
+            f"{scope}//td[normalize-space(.) = {lit}]//a",
+            f"{scope}//a[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = {lit_lower}]",
         ]
     else:
-        # Fallback scoped to table cells only, with breadcrumb guard
-        candidate_xpaths = [
-            f"//table//a[contains(normalize-space(.), {lit}) and {_nav_guard}]",
-            f"//table//td[contains(normalize-space(.), {lit})]//a[{_nav_guard}]",
+        strict_candidate_xpaths = [
+            f"//table//a[normalize-space(.) = {lit} and {_nav_guard}]",
+            f"//table//td[normalize-space(.) = {lit}]//a[{_nav_guard}]",
+            f"//table//a[translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = {lit_lower} and {_nav_guard}]",
         ]
+
+    # XPath to confirm we navigated INSIDE the folder:
+    # once inside, the folder link disappears from the listing table.
+    _tf_lit = xpath_literal(folder_name)
+    _inside_xpath = (
+        f"{scope}//a[normalize-space(.) = {_tf_lit}]"
+        if scope else
+        f"//table//a[normalize-space(.) = {_tf_lit} and {_nav_guard}]"
+    )
 
     end_time = time.time() + (wait._timeout if hasattr(wait, '_timeout') else 15)
     last_err = None
@@ -1473,7 +1665,12 @@ def click_folder_by_name(driver, wait, folder_name: str, config: dict, descripti
                         except Exception:
                             driver.execute_script("arguments[0].click();", el)
                         log('debug', f"Clicked exact folder '{folder_name}'.")
-                        return
+                        # Confirm navigation
+                        if _wait_for_folder_navigation(driver, _inside_xpath, folder_name, log):
+                            return
+                        # Not confirmed — let loop retry
+                        log('warning', f"Click on '{folder_name}' did not confirm navigation. Retrying...")
+                        continue
                 except Exception:
                     # If ancestor check fails, proceed with click
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
@@ -1483,17 +1680,23 @@ def click_folder_by_name(driver, wait, folder_name: str, config: dict, descripti
                     except Exception:
                         driver.execute_script("arguments[0].click();", el)
                     log('debug', f"Clicked exact folder '{folder_name}'.")
-                    return
+                    if _wait_for_folder_navigation(driver, _inside_xpath, folder_name, log):
+                        return
+                    log('warning', f"Click on '{folder_name}' (fallback) did not confirm navigation. Retrying...")
+                    continue
 
-            # 2. If not found via direct exact, gather candidates and enforce STRICT Python exact equality
+            # 2. Gather strict-equality candidates
             candidates = []
-            for xp in candidate_xpaths:
-                found = driver.find_elements(By.XPATH, xp)
-                for f in found:
-                    if f.is_displayed() and f not in candidates:
-                        candidates.append(f)
+            for xp in strict_candidate_xpaths:
+                try:
+                    found = driver.find_elements(By.XPATH, xp)
+                    for f in found:
+                        if f.is_displayed() and f not in candidates:
+                            candidates.append(f)
+                except Exception:
+                    pass
 
-            # Check Python exact match among candidates ONLY
+            # Python-side exact match among candidates ONLY
             best_el = None
             for c in candidates:
                 raw_text = c.get_attribute("textContent") or c.get_attribute("innerText") or c.text or ""
@@ -1509,8 +1712,11 @@ def click_folder_by_name(driver, wait, folder_name: str, config: dict, descripti
                     best_el.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", best_el)
-                log('debug', f"Clicked exact folder '{folder_name}' via candidate.")
-                return
+                log('debug', f"Clicked exact folder '{folder_name}' via strict candidate.")
+                if _wait_for_folder_navigation(driver, _inside_xpath, folder_name, log):
+                    return
+                log('warning', f"Candidate click on '{folder_name}' did not confirm navigation. Retrying...")
+                continue
 
         except Exception as e:
             last_err = e

@@ -1,0 +1,19 @@
+{
+  "extraPaths": [
+    "unified_dashboard"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "unified_dashboard",
+      "extraPaths": [
+        "unified_dashboard"
+      ]
+    },
+    {
+      "root": ".",
+      "extraPaths": [
+        "unified_dashboard"
+      ]
+    }
+  ]
+}

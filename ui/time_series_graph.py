@@ -141,7 +141,7 @@ class TimeSeriesTelemetryGraph(tk.Frame):
                 pass
         self.after(0, _apply)
 
-    def add_data_point(self, cumulative_bytes: int, speed_bps: float = None, file_name: str = None, total_bytes: int = None):
+    def add_data_point(self, cumulative_bytes: int, speed_bps: float | None = None, file_name: str | None = None, total_bytes: int | None = None):
         """Record a live telemetry sample (thread-safe)."""
         now = time.time()
         if self.start_epoch is None:

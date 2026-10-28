@@ -25,6 +25,7 @@ export test/
 upload test/
 pd to data/
 scratch_*.py
+**/scratch_*.py
 out of project/
 
 # Virtual environment

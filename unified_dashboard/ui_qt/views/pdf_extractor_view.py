@@ -86,23 +86,23 @@ class RulesTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return len(self.HEADERS)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.HEADERS[section]
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._rows):
             return None
         r = self._rows[index.row()]
         col = index.column()
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
                 return r.get("label", "")
             else:
                 pat = r.get("pattern", "")
                 return (pat[:70] + "...") if len(pat) > 70 else pat
-        elif role == Qt.ForegroundRole:
+        elif role == Qt.ItemDataRole.ForegroundRole:
             if col == 0:
                 return QBrush(QColor(TEXT_PRIMARY))
             return QBrush(QColor(TEXT_SECONDARY))
@@ -129,19 +129,19 @@ class PreviewDataModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return len(self._headers)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             if section < len(self._headers):
                 return self._headers[section]
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._rows):
             return None
         r = index.row()
         c = index.column()
         row = self._rows[r]
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             return row[c] if c < len(row) else ""
         return None
 
@@ -1193,7 +1193,7 @@ class PdfExtractorView(BaseToolWidget):
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(color_hex))
             if bold:
-                fmt.setFontWeight(QFont.Bold)
+                fmt.setFontWeight(QFont.Weight.Bold)
             return fmt
 
         fmt_matched = _make_fmt("#4ADE80")       # Green
@@ -1216,11 +1216,11 @@ class PdfExtractorView(BaseToolWidget):
             if chosen_fmt:
                 block = doc.findBlockByNumber(i)
                 if block.isValid():
-                    cursor = QTextCursor(block)
-                    cursor.select(QTextCursor.BlockUnderCursor)
+                    blk_cursor: QTextCursor = QTextCursor(block)
+                    blk_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
                     sel = QTextEdit.ExtraSelection()
-                    sel.cursor = cursor
-                    sel.format = chosen_fmt
+                    setattr(sel, "cursor", blk_cursor)
+                    setattr(sel, "format", chosen_fmt)
                     extra_selections.append(sel)
 
         self.txt_verify_lines.setExtraSelections(extra_selections)

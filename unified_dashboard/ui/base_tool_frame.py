@@ -42,7 +42,8 @@ class QueueTask:
 class InterTaskDialog(tk.Toplevel):
     """Modal popup shown between queued tasks with inactivity countdown timer."""
 
-    def __init__(self, parent, task: QueueTask, completed_idx: int, total_count: int, timeout_minutes: int = 15):
+    def __init__(self, parent, task: QueueTask, completed_idx: int, total_count: int,
+                 timeout_minutes: int = 15, inactivity_action: str = "close_app"):
         super().__init__(parent)
         self.title("Task Completed — Verification & Next Step")
         self.geometry("640x520")
@@ -55,6 +56,7 @@ class InterTaskDialog(tk.Toplevel):
         self.choice = 3  # Default fallback option (Proceed without verifying)
         self.timeout_occurred = False
         self.seconds_remaining = int(timeout_minutes * 60)
+        self.inactivity_action = inactivity_action
         self._timer_id = None
 
         self._build_ui(task, completed_idx, total_count)
@@ -89,10 +91,20 @@ class InterTaskDialog(tk.Toplevel):
         )
         self.lbl_timer.pack(fill="x")
 
+        action_descriptions = {
+            "close_app": "If no action is selected before the countdown reaches 0:00, the system safely assumes you are\naway from your desk, stops execution, and safely closes the application.",
+            "pause_queue": "If no action is selected before the countdown reaches 0:00, the system safely\npauses execution and waits for you to resume.",
+            "proceed_next": "If no action is selected before the countdown reaches 0:00, the system automatically\nproceeds to execute the next queued task.",
+            "stop_automation": "If no action is selected before the countdown reaches 0:00, the system stops\nexecution and cancels remaining tasks while keeping the program open.",
+        }
+        timer_sub = action_descriptions.get(
+            self.inactivity_action,
+            "If no action is selected before the countdown reaches 0:00, the system assumes you are\naway from your desk, stops execution, and safely closes the automation."
+        )
+
         tk.Label(
             timer_card,
-            text="If no action is selected before the countdown reaches 0:00, the system assumes you are\n"
-                 "away from your desk, stops execution, and safely closes the automation.",
+            text=timer_sub,
             font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD, anchor="center", justify="center"
         ).pack(fill="x", pady=(2, 0))
 
@@ -684,7 +696,7 @@ class BaseToolFrame(tk.Frame):
         color = ACCENT_DANGER if is_error else TEXT_ACCENT
         self.after(0, lambda: self.lbl_status.config(text=f"Status: {text}", fg=color))
 
-    def set_progress(self, current: int, total: int = None):
+    def set_progress(self, current: int, total: int | None = None):
         def _update():
             if total:
                 self.progress_bar.config(maximum=total)
@@ -769,7 +781,7 @@ class BaseToolFrame(tk.Frame):
     # Queue Management Methods & Hooks
     # ------------------------------------------------------------------
 
-    def get_task_from_inputs(self, silent: bool = False) -> QueueTask:
+    def get_task_from_inputs(self, silent: bool = False) -> QueueTask | None:
         """Override in child frames to construct a QueueTask from form inputs."""
         return None
 
@@ -894,9 +906,27 @@ class BaseToolFrame(tk.Frame):
                         choice, is_timeout = self._show_inter_task_modal(task, idx + 1, len(self.queue_tasks))
 
                         if is_timeout:
-                            self.log("warning", "[QUEUE] Inactivity timeout reached (User Away). Stopping automation.")
-                            self.update_status("Stopped due to inactivity timeout (User Away)", is_error=True)
-                            break
+                            action = settings.get("inter_task_inactivity_action", "close_app")
+                            self.log("warning", f"[QUEUE] Inactivity timeout reached (User Away). Action: {action}")
+                            if action == "close_app":
+                                self.log("warning", "[QUEUE] Closing application safely due to inactivity session timeout.")
+                                self.update_status("Closed due to inactivity timeout", is_error=True)
+                                self.after(150, self.winfo_toplevel().destroy)
+                                break
+                            elif action == "pause_queue":
+                                self.paused_queue_idx = idx + 1
+                                self.after(0, self.refresh_queue_display)
+                                self.log("info", f"[QUEUE] Queue paused due to inactivity timeout. Click 'Start Automation' to resume.")
+                                self.update_status(f"Paused at Task {idx+2}/{len(self.queue_tasks)} (Inactivity). Click '▶ Start Automation' to continue.")
+                                break
+                            elif action == "stop_automation":
+                                self.log("warning", "[QUEUE] Automation stopped due to inactivity timeout.")
+                                self.update_status("Stopped due to inactivity timeout (User Away)", is_error=True)
+                                break
+                            elif action == "proceed_next":
+                                self.log("info", "[QUEUE] Automatically proceeding to next task due to inactivity timeout.")
+                                task.verified = False
+                                # Continue to next queued task
 
                         if choice == 1:  # Verify current task & discard next tasks
                             self.log("info", "[QUEUE] Choice 1 selected: Verifying current task & discarding remaining tasks.")
@@ -957,9 +987,10 @@ class BaseToolFrame(tk.Frame):
         evt = threading.Event()
         res = {'choice': 3, 'timeout': False}
         timeout_mins = settings.get("inter_task_timeout_minutes", 15)
+        inact_action = settings.get("inter_task_inactivity_action", "close_app")
 
         def _open():
-            dlg = InterTaskDialog(self, task, completed_num, total_count, timeout_minutes=timeout_mins)
+            dlg = InterTaskDialog(self, task, completed_num, total_count, timeout_minutes=timeout_mins, inactivity_action=inact_action)
             res['choice'] = dlg.choice
             res['timeout'] = dlg.timeout_occurred
             evt.set()

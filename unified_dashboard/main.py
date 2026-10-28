@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import pandas as _pd
     if hasattr(_pd.RangeIndex, '__iter__'):
-        _pd.RangeIndex.__iter__ = lambda self: iter(self._range)
+        _pd.RangeIndex.__iter__ = lambda self: iter(getattr(self, '_range', range(len(self))))
 except Exception:
     pass  # Never block startup for a compat patch failure
 # ─────────────────────────────────────────────────────────────────────────────

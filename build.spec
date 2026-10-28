@@ -48,13 +48,6 @@ try:
 except Exception:
     webdriver_manager_submodules = []
 
-<<<<<<< Updated upstream:build.spec
-# Selenium Manager ships a small platform-specific binary
-# (selenium/webdriver/common/windows/selenium-manager.exe) that resolves a
-# matching chromedriver WITHOUT needing internet. If this isn't bundled as
-# a data file, attempt 1 in core/chrome_driver.py can't run at all and the
-# app falls back to the online-only webdriver-manager path.
-=======
 try:
     sklearn_submodules = collect_submodules('sklearn')
 except Exception:
@@ -66,7 +59,11 @@ except Exception:
     pass
 
 # Selenium Manager binary
->>>>>>> Stashed changes:unified_dashboard/build.spec
+# Selenium Manager ships a small platform-specific binary
+# (selenium/webdriver/common/windows/selenium-manager.exe) that resolves a
+# matching chromedriver WITHOUT needing internet. If this isn't bundled as
+# a data file, attempt 1 in core/chrome_driver.py can't run at all and the
+# app falls back to the online-only webdriver-manager path.
 try:
     datas += collect_data_files('selenium')
 except Exception:

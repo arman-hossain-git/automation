@@ -44,6 +44,11 @@ your web automation workflows into 3 powerful, modular automation engines.
     • Dynamic Field Detection: auto-detects 'Adjust Score' field vs 'Grade' menu.
     • Un-submit mode reverts grades to 'No' and clears submission status.
 
+🗑️  4. STUDENT REMOVAL
+    • Removes specified students from class lists in PCR Educator / portals and saves each class.
+    • Optimizes navigation by grouping students by class URL to avoid redundant page loads.
+    • Multi-worker parallel processing, session resume, and automatic dialog confirmation.
+
 ────────────────────────────────────────────────────────────────────────────────
 2. QUICK START (All Modules)
 ────────────────────────────────────────────────────────────────────────────────
@@ -118,6 +123,20 @@ Required Columns:
 
 Optional Columns:
   • adjust_score   — Override score for 'Adjust Score' field if different
+
+────────────────────────────────────────────────────────────────────────────────
+STUDENT REMOVAL — student_removal.csv
+────────────────────────────────────────────────────────────────────────────────
+
+Required Columns:
+  • studentId      — Student ID (e.g. 10245)
+  • link           — Direct URL to the class / student list page
+
+Example:
+  studentId,link
+  10245,https://portal.example.com/classes/101/students
+  10246,https://portal.example.com/classes/101/students
+  10290,https://portal.example.com/classes/102/students
 """
 
 
@@ -183,7 +202,7 @@ class DocumentationView(QWidget):
 
         btn_copy_cred = QPushButton("📋  Copy to Clipboard")
         btn_copy_cred.setObjectName("btn_primary")
-        btn_copy_cred.setCursor(Qt.PointingHandCursor)
+        btn_copy_cred.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_copy_cred.clicked.connect(lambda: self._copy_to_clipboard(CREDENTIALS_TEMPLATE, "Credentials template"))
         c_btn_row.addWidget(btn_copy_cred)
         c_layout.addLayout(c_btn_row)
@@ -224,14 +243,25 @@ class DocumentationView(QWidget):
         tabs.addTab(tab_csv, " 📊 CSV Formats ")
 
     def _copy_to_clipboard(self, text: str, label: str = "Content"):
+        copied = False
         try:
-            import subprocess
-            subprocess.run(["clip"], input=text.encode("utf-16"), check=True)
+            from PySide6.QtGui import QGuiApplication
+            clipboard = QGuiApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(text)
+                copied = True
         except Exception:
+            pass
+
+        if not copied:
             try:
-                import pyperclip
-                pyperclip.copy(text)
+                import subprocess
+                subprocess.run(["clip"], input=text.encode("utf-16"), check=True)
+                copied = True
             except Exception:
-                QMessageBox.warning(self, "Copy Failed", f"Could not copy {label} to clipboard.")
-                return
-        QMessageBox.information(self, "Copied", f"{label} copied to clipboard successfully.")
+                pass
+
+        if copied:
+            QMessageBox.information(self, "Copied", f"{label} copied to clipboard successfully.")
+        else:
+            QMessageBox.warning(self, "Copy Failed", f"Could not copy {label} to clipboard.")

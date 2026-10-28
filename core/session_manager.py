@@ -15,10 +15,65 @@ import time
 import socket
 import datetime
 import logging
+import threading
+
+from core.utils import describe_exception
 
 from core.paths import get_persistent_dir
 
 _log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Selenium dead-session detection
+# ---------------------------------------------------------------------------
+
+def is_dead_session_error(exc: BaseException) -> bool:
+    """Return True if *exc* indicates that the Chrome/ChromeDriver session is
+    unrecoverably gone (crashed, closed, handle invalidated, etc.).
+
+    These errors are *not* transient network hiccups; retrying on the same
+    driver instance will always fail in the same way, so they should be
+    treated as NonRetryable and the worker should restart its driver instead.
+
+    Recognised patterns:
+    - selenium.common.exceptions.InvalidSessionIdException
+    - selenium.common.exceptions.NoSuchWindowException
+    - selenium.common.exceptions.WebDriverException whose message contains
+      telltale ChromeDriver crash strings ('GetHandleVerifier', 'invalid session',
+      'no such window', 'disconnected', 'chrome not reachable',
+      'target window already closed').
+    """
+    try:
+        from selenium.common.exceptions import (
+            InvalidSessionIdException, NoSuchWindowException, WebDriverException
+        )
+        if isinstance(exc, (InvalidSessionIdException, NoSuchWindowException)):
+            return True
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return True
+        msg = str(exc).lower()
+        dead_patterns = (
+            "gethandleverifier",
+            "invalid session id",
+            "no such window",
+            "disconnected: ",
+            "chrome not reachable",
+            "target window already closed",
+            "session deleted",
+            "no such execution context",
+            "read timed out",
+            "httpconnectionpool",
+            "max retries exceeded",
+            "connection refused",
+            "connection reset",
+            "remote disconnected",
+        )
+        if any(p in msg for p in dead_patterns):
+            return True
+    except ImportError:
+        pass
+    return False
 
 
 class NonRetryableError(Exception):
@@ -26,6 +81,19 @@ class NonRetryableError(Exception):
     process_item_with_retry -- e.g. the target system has definitively
     rejected an item (not a transient/network hiccup), so retrying would
     just waste time and re-trigger the same rejection."""
+    pass
+
+
+class BrowserSessionError(NonRetryableError):
+    """Raised when the Chrome/ChromeDriver session is unrecoverably dead
+    (crashed window, invalid session handle, etc.).
+    The caller should restart the driver and resume from the next item."""
+    pass
+
+
+class BrowserCrashError(BrowserSessionError):
+    """Alias for BrowserSessionError, used when ChromeDriver itself crashes
+    (vs. just a closed tab)."""
     pass
 
 
@@ -106,7 +174,11 @@ def wait_for_network_connection(retry_wait_seconds: int = 5, abort_flag=None, lo
 
 
 class SessionManager:
-    """Manages reading, writing, and clearing session states for automation tools."""
+    """Manages reading, writing, and clearing session states for automation tools.
+    Supports thread-safe multi-worker parallel execution and progress aggregation.
+    """
+
+    _lock = threading.RLock()
 
     @staticmethod
     def get_session_file(module_id: str) -> str:
@@ -116,41 +188,82 @@ class SessionManager:
     @classmethod
     def get_unfinished_session(cls, module_id: str) -> dict | None:
         """Return unfinished session dictionary if exists and status is in_progress, else None."""
-        session_file = cls.get_session_file(module_id)
-        if not os.path.isfile(session_file):
+        with cls._lock:
+            session_file = cls.get_session_file(module_id)
+            if not os.path.isfile(session_file):
+                return None
+            try:
+                with open(session_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data.get("status") == "in_progress":
+                    return data
+            except Exception as e:
+                _log.warning(f"Could not read session file {session_file}: {e}")
             return None
-        try:
-            with open(session_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and data.get("status") == "in_progress":
-                return data
-        except Exception as e:
-            _log.warning(f"Could not read session file {session_file}: {e}")
-        return None
 
     @classmethod
     def start_session(cls, module_id: str, user_inputs: dict, total_items: int) -> dict:
         """Initialize or overwrite session state when a new automation run starts."""
-        existing = cls.get_unfinished_session(module_id)
-        if existing and existing.get("user_inputs") == user_inputs:
-            # Continue existing session
-            return existing
+        with cls._lock:
+            existing = cls.get_unfinished_session(module_id)
+            if existing and existing.get("user_inputs") == user_inputs:
+                # Continue existing session
+                return existing
 
-        session_data = {
-            "module_id": module_id,
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "status": "in_progress",
-            "user_inputs": user_inputs,
-            "total_items": total_items,
-            "completed_item_ids": [],
-            "failed_item_ids": [],
-        }
-        cls._save(module_id, session_data)
-        return session_data
+            session_data = {
+                "module_id": module_id,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "in_progress",
+                "user_inputs": user_inputs,
+                "total_items": total_items,
+                "completed_item_ids": [],
+                "failed_item_ids": [],
+            }
+            cls._save(module_id, session_data)
+            return session_data
+
+    @classmethod
+    def get_all_completed_item_ids(cls, base_module_id: str) -> set[str]:
+        """Collect all completed item IDs across base_module_id and any worker sessions
+        (e.g., base_module_id, base_module_id_w0, base_module_id_w1, ...).
+        """
+        with cls._lock:
+            ensure_sessions_dir()
+            completed = set()
+            # 1. Base session
+            base_sess = cls.get_unfinished_session(base_module_id)
+            if base_sess:
+                for it in base_sess.get("completed_item_ids", []):
+                    completed.add(str(it).strip())
+            # 2. Worker sessions (base_module_id_w0, etc.)
+            prefix = f"{base_module_id}_w"
+            for fname in os.listdir(SESSIONS_DIR):
+                if fname.startswith(prefix) and fname.endswith("_session.json"):
+                    fpath = os.path.join(SESSIONS_DIR, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if isinstance(data, dict):
+                            for it in data.get("completed_item_ids", []):
+                                completed.add(str(it).strip())
+                    except Exception:
+                        pass
+            return completed
 
     @classmethod
     def update_item_status(cls, module_id: str, item_id: str, success: bool = True):
-        """Record an item as completed or failed and save session."""
+        """Record an item as completed or failed and save session.
+        If called with a worker module ID (e.g. file_exporter_w0), automatically
+        synchronizes the item status with the parent session as well.
+        """
+        with cls._lock:
+            cls._update_single(module_id, item_id, success)
+            if "_w" in module_id:
+                base_module_id = module_id.split("_w")[0]
+                cls._update_single(base_module_id, item_id, success)
+
+    @classmethod
+    def _update_single(cls, module_id: str, item_id: str, success: bool = True):
         session_file = cls.get_session_file(module_id)
         if not os.path.isfile(session_file):
             return
@@ -167,7 +280,9 @@ class SessionManager:
                 if item_str in failed:
                     failed.remove(item_str)
             else:
-                if item_str not in failed and item_str not in completed:
+                if item_str in completed:
+                    completed.remove(item_str)
+                if item_str not in failed:
                     failed.append(item_str)
 
             cls._save(module_id, data)
@@ -176,13 +291,30 @@ class SessionManager:
 
     @classmethod
     def clear_session(cls, module_id: str):
-        """Remove or mark session as completed."""
-        session_file = cls.get_session_file(module_id)
-        if os.path.isfile(session_file):
-            try:
-                os.remove(session_file)
-            except Exception as e:
-                _log.warning(f"Could not remove session file {session_file}: {e}")
+        """Remove or mark session as completed, including any worker sessions if base module."""
+        with cls._lock:
+            session_file = cls.get_session_file(module_id)
+            if os.path.isfile(session_file):
+                try:
+                    os.remove(session_file)
+                except Exception as e:
+                    _log.warning(f"Could not remove session file {session_file}: {e}")
+
+            # Also clear worker sessions if clearing base module
+            if "_w" not in module_id:
+                ensure_sessions_dir()
+                prefix = f"{module_id}_w"
+                try:
+                    for fname in os.listdir(SESSIONS_DIR):
+                        if fname.startswith(prefix) and fname.endswith("_session.json"):
+                            try:
+                                os.remove(os.path.join(SESSIONS_DIR, fname))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+    end_session = clear_session
 
     @classmethod
     def _save(cls, module_id: str, data: dict):
@@ -254,6 +386,18 @@ def process_item_with_retry(
         except Exception as e:
             last_error = e
 
+            # Dead browser session — not a transient hiccup, retrying on
+            # the same dead driver will always fail. Escalate immediately.
+            if is_dead_session_error(e):
+                log("warning",
+                    f"[BROWSER SESSION LOST] '{item_id}' — Chrome session is gone "
+                    f"(crashed/closed). Skipping retry; caller should restart the driver.")
+                last_error = BrowserSessionError(str(e))
+                last_error.__cause__ = e
+                if track_session:
+                    SessionManager.update_item_status(module_id, item_id, success=False)
+                return False, None, last_error
+
             if not check_network_connection():
                 log("warning",
                     f"[NETWORK DISRUPTION] Lost connection while processing '{item_id}'. "
@@ -273,7 +417,8 @@ def process_item_with_retry(
                 return False, None, last_error
 
             log("warning",
-                f"[RETRY {attempt}/{max_retries}] '{item_id}' failed ({e}). "
+                f"[RETRY {attempt}/{max_retries}] '{item_id}' failed "
+                f"({describe_exception(e)}). "
                 f"Retrying in {retry_wait_seconds}s...")
             for _ in range(int(max(1, retry_wait_seconds))):
                 if abort():

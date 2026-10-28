@@ -1,0 +1,9 @@
+search-path = ["unified_dashboard", ".", "unified_dashboard/.venv/Lib/site-packages"]
+infer-with-first-use = false
+check-unannotated-defs = false
+
+[[sub-config]]
+matches = "unified_dashboard"
+
+[[sub-config]]
+matches = "."

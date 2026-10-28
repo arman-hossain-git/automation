@@ -386,7 +386,7 @@ class ConfigurableExtractor:
 
     # ── PDF Reading & Record Splitting ──
 
-    def read_pdf(self, pdf_path, max_pages: int = None):
+    def read_pdf(self, pdf_path, max_pages: int | None = None):
         page_texts = []
         page_offsets = []
         current_offset = 0
@@ -401,7 +401,7 @@ class ConfigurableExtractor:
 
         return '\n'.join(page_texts), page_offsets
 
-    def read_pdf_lines(self, pdf_path: str, max_pages: int = None) -> list[str]:
+    def read_pdf_lines(self, pdf_path: str, max_pages: int | None = None) -> list[str]:
         """Return the raw extracted lines (no exclude filtering) for the
         Visual Config Verification panel."""
         full_text, _ = self.read_pdf(pdf_path, max_pages=max_pages)
@@ -1190,7 +1190,7 @@ class StudentScheduleExtractor:
                 return True
         return False
 
-    def read_pdf(self, pdf_path: str, max_pages: int = None):
+    def read_pdf(self, pdf_path: str, max_pages: int | None = None):
         """Return (full_text, page_offsets) like ConfigurableExtractor."""
         page_texts = []
         page_offsets = []
@@ -1813,7 +1813,7 @@ class StudentTranscriptExtractor:
         self.config = config or {}
         self.output_columns = config.get("output_columns", [])
 
-    def read_pdf(self, pdf_path: str, max_pages: int = None):
+    def read_pdf(self, pdf_path: str, max_pages: int | None = None):
         page_texts = []
         page_offsets = []
         current_offset = 0

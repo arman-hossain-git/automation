@@ -34,6 +34,12 @@ DEFAULT_SETTINGS = {
     "auto_apply_learned_devtools": True,
     # Waiting time / Inactivity timeout (minutes) between two tasks in queue
     "inter_task_timeout_minutes": 15,
+    # Inactivity action after timeout:
+    # 'close_app'        -> Safely stop automation and exit application
+    # 'pause_queue'      -> Pause automation and wait for user to resume
+    # 'proceed_next'     -> Automatically continue to next queued task
+    # 'stop_automation'  -> Stop automation and keep program open
+    "inter_task_inactivity_action": "close_app",
     # Color Scheme / Theme mode: 'system' (Same as local PC), 'dark', or 'light'
     "theme": "system",
 }

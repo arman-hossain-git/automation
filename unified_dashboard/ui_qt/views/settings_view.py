@@ -24,6 +24,14 @@ THEME_MAP = {
 }
 REV_THEME_MAP = {v: k for k, v in THEME_MAP.items()}
 
+INACTIVITY_ACTION_MAP = {
+    "Close Application (Safely exit)": "close_app",
+    "Pause Queue (Wait for user to resume)": "pause_queue",
+    "Proceed with Next Task (Continue automatically)": "proceed_next",
+    "Stop Automation (Abort remaining tasks)": "stop_automation",
+}
+REV_INACTIVITY_ACTION_MAP = {v: k for k, v in INACTIVITY_ACTION_MAP.items()}
+
 
 class SettingsView(QWidget):
     """System Settings View Panel in PySide6."""
@@ -113,6 +121,15 @@ class SettingsView(QWidget):
         self.spin_inter_task.setRange(1, 120)
         self.spin_inter_task.setValue(int(settings.get("inter_task_timeout_minutes", 15)))
         g2.addWidget(self.spin_inter_task, 2, 1)
+
+        g2.addWidget(QLabel("On Inactivity Timeout:"), 2, 2)
+        self.combo_inactivity_action = QComboBox()
+        self.combo_inactivity_action.addItems(list(INACTIVITY_ACTION_MAP.keys()))
+        cur_action = settings.get("inter_task_inactivity_action", "close_app")
+        self.combo_inactivity_action.setCurrentText(
+            REV_INACTIVITY_ACTION_MAP.get(cur_action, "Close Application (Safely exit)")
+        )
+        g2.addWidget(self.combo_inactivity_action, 2, 3)
 
         scroll_layout.addWidget(grp_timeouts)
 
@@ -206,6 +223,9 @@ class SettingsView(QWidget):
         settings.set("max_retries", self.spin_retries.value())
         settings.set("retry_wait_seconds", self.spin_retry_wait.value())
         settings.set("inter_task_timeout_minutes", self.spin_inter_task.value())
+        settings.set("inter_task_inactivity_action", INACTIVITY_ACTION_MAP.get(
+            self.combo_inactivity_action.currentText(), "close_app"
+        ))
         settings.set("log_level", self.combo_log_level.currentText())
         settings.set("confirm_on_abort", self.chk_confirm_abort.isChecked())
         settings.set("default_download_dir", self.txt_default_dir.text().strip())
@@ -232,6 +252,10 @@ class SettingsView(QWidget):
         self.spin_retries.setValue(int(settings.get("max_retries", 3)))
         self.spin_retry_wait.setValue(int(settings.get("retry_wait_seconds", 5)))
         self.spin_inter_task.setValue(int(settings.get("inter_task_timeout_minutes", 15)))
+        cur_action = settings.get("inter_task_inactivity_action", "close_app")
+        self.combo_inactivity_action.setCurrentText(
+            REV_INACTIVITY_ACTION_MAP.get(cur_action, "Close Application (Safely exit)")
+        )
         self.combo_log_level.setCurrentText(settings.get("log_level", "INFO"))
         self.chk_confirm_abort.setChecked(settings.get("confirm_on_abort", True))
         self.txt_default_dir.setText(settings.get("default_download_dir", ""))

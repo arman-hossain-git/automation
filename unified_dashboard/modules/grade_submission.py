@@ -25,6 +25,7 @@ import pandas as pd
 from datetime import datetime
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
@@ -54,6 +55,16 @@ MODULE_ID = "grade_submission"
 # execution_results CSV without interleaving partial writes.
 _csv_write_lock = threading.Lock()
 _registry_lock = threading.Lock()
+
+
+def _has_value(val) -> bool:
+    """Safely check if a cell value is present and not NaN / None."""
+    if val is None:
+        return False
+    try:
+        return bool(pd.notna(val))
+    except Exception:
+        return False
 
 
 def make_submission_key(student_id: str, link: str = "") -> str:
@@ -287,6 +298,15 @@ def _update_master_csv(master_path: str, header: list, student_id: str, link: st
 class GradeSubmitter:
     """Submits student final grades with automatic detection of Adjust Score vs Grade dropdown field."""
 
+    _csv_lock: threading.Lock = _csv_write_lock
+    _run_id: str = ""
+
+    def __init__(self, log=None, on_progress=None, abort_flag=None):
+        self._log = log or (lambda l, m: None)
+        self._on_progress = on_progress or (lambda d: None)
+        self._abort = abort_flag or (lambda: False)
+        self._csv_lock = _csv_write_lock
+
     def run(
         self,
         config: dict,
@@ -503,26 +523,32 @@ class GradeSubmitter:
                 # Extract finalGradeReceivedDate
                 date_val = ""
                 for d_col in ["finalGradeReceivedDate", "FinalGradeReceivedDate", "final_grade_received_date"]:
-                    if d_col in df.columns and pd.notna(row.get(d_col)):
+                    if d_col in df.columns and _has_value(row.get(d_col)):
                         date_val = str(row.get(d_col)).strip()
                         break
 
                 # Extract score value
                 score_val = ""
-                for s_col in ["score", "Score", "SCORE"]:
-                    if s_col in df.columns and pd.notna(row.get(s_col)):
-                        score_val = str(row.get(s_col)).strip()
-                        break
+                for col in df.columns:
+                    clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+                    if clean_c in ("score", "finalscore") and _has_value(row.get(col)):
+                        val = str(row.get(col)).strip()
+                        if val.lower() not in ("", "nan", "none", "null"):
+                            score_val = val
+                            break
 
                 # Extract grade value
                 grade_val = ""
-                for g_col in ["grade", "Grade", "GRADE"]:
-                    if g_col in df.columns and pd.notna(row.get(g_col)):
-                        grade_val = str(row.get(g_col)).strip()
-                        break
+                for col in df.columns:
+                    clean_c = str(col).strip().lower().replace(" ", "").replace("_", "")
+                    if clean_c in ("grade", "finalgrade") and _has_value(row.get(col)):
+                        val = str(row.get(col)).strip()
+                        if val.lower() not in ("", "nan", "none", "null"):
+                            grade_val = val
+                            break
 
-                enrollment_date_val = str(row["enrollmentDate"]).strip() if "enrollmentDate" in df.columns and pd.notna(row.get("enrollmentDate")) else ""
-                completion_date_val = str(row["completionDate"]).strip() if "completionDate" in df.columns and pd.notna(row.get("completionDate")) else ""
+                enrollment_date_val = str(row["enrollmentDate"]).strip() if "enrollmentDate" in df.columns and _has_value(row.get("enrollmentDate")) else ""
+                completion_date_val = str(row["completionDate"]).strip() if "completionDate" in df.columns and _has_value(row.get("completionDate")) else ""
 
                 item_key = make_submission_key(student_id, link)
 
@@ -556,7 +582,8 @@ class GradeSubmitter:
                     'total_students': total_count,
                     'total': total_count,
                 })
-                self._log('info', f"--- [Row {index+1}/{total_count}] Student ID: {student_id} ---")
+                row_num = int(str(index)) + 1 if str(index).isdigit() else 1
+                self._log('info', f"--- [Row {row_num}/{total_count}] Student ID: {student_id} ---")
 
                 def _process_student():
                     # Optimization: Skip full page navigation if already on this link
@@ -694,201 +721,145 @@ class GradeSubmitter:
                         # UN-SUBMIT GRADE WORKFLOW
                         # Mark 'Final Grade Received' as 'No' and submit the status modal
                         # ==============================================================
-                        modal_submit_xpath = config.get("update_xpath") or config.get("submit_xpath")
-                        if not modal_submit_xpath:
-                            raise Exception("Neither 'update_xpath' nor 'submit_xpath' defined in credentials for modal submission.")
-
-                        # Try JS fast-path for unsubmit (non-blocking — no WebDriverWait)
-                        js_unsub_ok = False
-                        try:
-                            # Check immediately; if button not yet in DOM fall through to Selenium
-                            _unsub_matches = driver.find_elements(By.XPATH, modal_submit_xpath)
-                            if _unsub_matches:
-                                unsub_res = self._js_unsubmit_modal(
-                                    driver,
-                                    config.get("final_grade_xpath", ""),
-                                    config.get("final_grade_received_date_xpath", ""),
-                                    modal_submit_xpath
-                                )
-                                if unsub_res.get("success"):
-                                    js_unsub_ok = True
-                                    self._log('info', "[JS-SPEED] Un-submitted grade in modal via direct JS.")
-                        except Exception as ue:
-                            self._log('debug', f"JS unsubmit note: {ue}")
-
-                        if not js_unsub_ok:
-                            fg_elem = wait.until(EC.presence_of_element_located((By.XPATH, config["final_grade_xpath"])))
-                            fg_dropdown = Select(fg_elem)
+                        fg_xpath = config.get("final_grade_xpath", "")
+                        if fg_xpath:
                             try:
-                                fg_dropdown.select_by_visible_text("No")
-                            except Exception:
-                                no_selected = False
-                                for opt in fg_dropdown.options:
-                                    if opt.text.strip().lower() == "no" or opt.get_attribute("value").strip().lower() in ("no", "0", "n", "false"):
-                                        opt.click()
-                                        no_selected = True
-                                        break
-                                if not no_selected:
-                                    raise Exception("Could not find 'No' option in Final Grade Received dropdown.")
-                            self._log('info', "Marked 'Final Grade Received' dropdown as 'No'.")
-
-                            # Safely clear final grade received date if field is present and active
-                            date_xpath = config.get("final_grade_received_date_xpath", "")
-                            if date_xpath:
+                                fg_elem = wait.until(EC.presence_of_element_located((By.XPATH, fg_xpath)))
+                                fg_dropdown = Select(fg_elem)
                                 try:
-                                    date_elems = driver.find_elements(By.XPATH, date_xpath)
-                                    if date_elems and date_elems[0].is_displayed() and date_elems[0].is_enabled():
-                                        date_elems[0].clear()
-                                        self._log('info', "Cleared 'Final Grade Received Date' field.")
+                                    fg_dropdown.select_by_visible_text("No")
                                 except Exception:
-                                    pass
+                                    for opt in fg_dropdown.options:
+                                        if opt.text.strip().lower() == "no" or opt.get_attribute("value").strip().lower() in ("no", "0", "n", "false"):
+                                            opt.click()
+                                            break
+                                self._log('info', "Marked 'Final Grade Received' dropdown as 'No'.")
+                            except Exception as fge:
+                                self._log('debug', f"Final grade dropdown note: {fge}")
 
-                            safe_click(driver, wait, modal_submit_xpath, "Update/Submit button", log_func=self._log)
+                        # Safely clear final grade received date if field is present and active
+                        date_xpath = config.get("final_grade_received_date_xpath", "")
+                        if date_xpath:
+                            try:
+                                date_elems = driver.find_elements(By.XPATH, date_xpath)
+                                if date_elems and date_elems[0].is_displayed() and date_elems[0].is_enabled():
+                                    date_elems[0].clear()
+                                    self._log('info', "Cleared 'Final Grade Received Date' field.")
+                            except Exception:
+                                pass
+
+                        # Click Update button in the edit modal
+                        self._submit_edit_modal(driver, wait, config, student_id=student_id)
+
+                        # Click the page-level Submit button (uses submit_xpath from credentials)
+                        self._click_submit(driver, wait, config, student_id=student_id)
+
+                        # Save the class form to commit un-submission
+                        self._save_class(driver, wait, config, student_id=student_id)
 
                         self._log('info', f"Successfully un-submitted grade for Student ID {student_id}.")
-                        self._log_csv_status(csv_path, student_id, link, "SUCCESS",
-                                             "Un-submitted grade (Final Grade Received marked 'No').")
+                        self._log_csv_status(target_csv, student_id, link, "SUCCESS",
+                                             "Un-submitted grade (Final Grade Received marked 'No') and saved class.")
                         return
 
                     # ==============================================================
                     # SUBMIT GRADE WORKFLOW (Standard)
                     # ==============================================================
                     has_grade_date = bool(date_val)
-                    update_xpath = config.get("update_xpath", "")
 
-                    # --- FAST-PATH 2: Direct In-Browser JS Modal Fill & Update (non-blocking) ---
-                    js_modal_ok = False
-                    if update_xpath:
+                    # Step 1: Fill Edit Status modal dates & status
+                    if enrollment_date_val and config.get("enrollment_date_xpath"):
                         try:
-                            # Non-blocking: modal opened via Edit button so update btn should be
-                            # present immediately. If not, fall through to Selenium in <1ms.
-                            _upd_matches = driver.find_elements(By.XPATH, update_xpath)
-                            if _upd_matches:
-                                modal_res = self._js_fill_modal_and_update(
-                                    driver,
-                                    config.get("enrollment_date_xpath", ""), enrollment_date_val,
-                                    config.get("completion_date_xpath", ""), completion_date_val,
-                                    config.get("final_grade_xpath", ""), has_grade_date,
-                                    config.get("final_grade_received_date_xpath", ""), date_val,
-                                    update_xpath,
-                                )
-                                if modal_res.get("success"):
-                                    js_modal_ok = True
-                                    self._log('info', "[JS-SPEED] Injected modal dates/status and clicked Update.")
-                        except Exception as me:
-                            self._log('debug', f"JS modal fast-path note: {me}")
-
-                    if not js_modal_ok:
-                        # Standard Selenium Fallback
-                        if enrollment_date_val and config.get("enrollment_date_xpath"):
                             safe_send_keys(driver, wait, config["enrollment_date_xpath"], enrollment_date_val,
                                            "Enrollment Date field", log_func=self._log)
+                        except Exception as ee:
+                            self._log('debug', f"Enrollment date note: {ee}")
 
-                        if completion_date_val and config.get("completion_date_xpath"):
+                    if completion_date_val and config.get("completion_date_xpath"):
+                        try:
                             safe_send_keys(driver, wait, config["completion_date_xpath"], completion_date_val,
                                            "Completion Date field", log_func=self._log)
+                        except Exception as ce:
+                            self._log('debug', f"Completion date note: {ce}")
 
-                        if has_grade_date:
-                            fg_dropdown = Select(wait.until(EC.presence_of_element_located((By.XPATH, config["final_grade_xpath"]))))
-                            fg_dropdown.select_by_visible_text("Yes")
+                    if has_grade_date:
+                        fg_xpath = config.get("final_grade_xpath", "")
+                        if fg_xpath:
+                            try:
+                                fg_elem = wait.until(EC.presence_of_element_located((By.XPATH, fg_xpath)))
+                                fg_dropdown = Select(fg_elem)
+                                try:
+                                    fg_dropdown.select_by_visible_text("Yes")
+                                except Exception:
+                                    for opt in fg_dropdown.options:
+                                        if opt.text.strip().lower() == "yes" or opt.get_attribute("value").strip().lower() in ("yes", "1", "y", "true"):
+                                            opt.click()
+                                            break
+                            except Exception as fge:
+                                self._log('debug', f"Final grade dropdown note: {fge}")
 
-                            safe_send_keys(driver, wait, config["final_grade_received_date_xpath"], date_val,
-                                           "Final Grade Received Date field", log_func=self._log)
-                        else:
-                            self._log('info', f"Student {student_id}: finalGradeReceivedDate missing — skipping grade/date fields.")
+                        dt_xpath = config.get("final_grade_received_date_xpath", "")
+                        if dt_xpath:
+                            try:
+                                safe_send_keys(driver, wait, dt_xpath, date_val,
+                                               "Final Grade Received Date field", log_func=self._log)
+                            except Exception as dte:
+                                self._log('debug', f"Final grade date note: {dte}")
+                    else:
+                        self._log('info', f"Student {student_id}: finalGradeReceivedDate missing — skipping grade/date fields.")
 
-                        safe_click(driver, wait, update_xpath, "Update button", log_func=self._log)
-                        self._log('info', "Submitted updated grade status.")
+                    # Step 2: Click the Update button IN THE EDIT MODAL
+                    self._submit_edit_modal(driver, wait, config, student_id=student_id)
+                    self._log('info', f"Clicked Update in Edit Status modal for Student ID {student_id}.")
 
-                    # --- FAST-PATH 3: Direct In-Browser JS Grade, Adjust Score & Submit ---
+                    # Step 3: If no final grade or score is provided, click Submit then Save and finish
+                    if not grade_val and not score_val:
+                        # Must click page-level Submit (submit_xpath) before Save Class
+                        self._click_submit(driver, wait, config, student_id=student_id)
+                        self._log('info', f"Student ID {student_id}: Clicked Submit (no grade/score in dataset).")
+                        self._save_class(driver, wait, config, student_id=student_id)
+                        self._log('info', f"Student ID {student_id}: No final grade or score provided — modal updated, submitted, and class saved. Completed.")
+                        self._log_csv_status(target_csv, student_id, link, "SUCCESS",
+                                             "Updated modal, clicked Submit, saved class (no final grade or score provided).")
+                        return
+
+                    # Step 4: Enter Grade and/or Score on class page
                     grade_xpath = config.get("grade_xpath", '//*[@id="GRADE"]')
                     adjust_score_xpath = config.get("adjust_score_xpath", "")
-                    field_submit_xpath = config.get("submit_xpath") or config.get("score_submit_xpath") or config.get("grade_submit_xpath", "")
 
-                    js_submit_ok = False
-                    if field_submit_xpath and (grade_val or score_val):
+                    # Step A: Select Grade from dropdown at //*[@id="GRADE"] (or grade_xpath)
+                    if grade_val:
+                        safe_select_dropdown(driver, grade_xpath, grade_val, "Grade dropdown", log_func=self._log)
+                        self._log('info', f"Selected Grade '{grade_val}' from dropdown at {grade_xpath}.")
+
+                    # Step B: Input Score into Adjust Score field
+                    if score_val and adjust_score_xpath:
+                        safe_send_keys(driver, wait, adjust_score_xpath, score_val, "Adjust Score field", log_func=self._log)
+                        self._log('info', f"Entered Score '{score_val}' into Adjust Score field.")
+                    elif score_val:
                         try:
-                            # Non-blocking poll: after clicking Update the grade page may need
-                            # a moment to render. Poll for up to 1.0s in 100ms steps — much
-                            # cheaper than a 3s blocking WebDriverWait timeout that dumps a
-                            # stacktrace on every miss.
-                            _sub_btn_ready = False
-                            _sub_poll_end = time.time() + 1.0
-                            while time.time() < _sub_poll_end:
-                                if driver.find_elements(By.XPATH, field_submit_xpath):
-                                    _sub_btn_ready = True
-                                    break
-                                time.sleep(0.1)
-                            if _sub_btn_ready:
-                                sub_res = self._js_submit_grade_and_score(
-                                    driver,
-                                    grade_xpath, grade_val,
-                                    adjust_score_xpath, score_val,
-                                    field_submit_xpath
-                                )
-                                if sub_res.get("success"):
-                                    js_submit_ok = True
-                                    self._log('info', f"[JS-SPEED] Successfully posted grade ('{grade_val}') and score ('{score_val}') for Student ID {student_id}.")
-                        except Exception as se:
-                            self._log('debug', f"JS grade/score fast-path note: {se}")
+                            field_xpath, _, field_label = self._resolve_score_or_grade_field(
+                                driver, config, student_id
+                            )
+                            if field_label == "Grade" and not grade_val:
+                                safe_select_dropdown(driver, field_xpath, score_val, f"{field_label} field", log_func=self._log)
+                            elif field_label == "Adjust Score" and score_val:
+                                safe_send_keys(driver, wait, field_xpath, score_val, f"{field_label} field", log_func=self._log)
+                        except Exception as res_err:
+                            self._log('info', f"Field resolution note: {res_err}")
 
-                    if not js_submit_ok:
-                        # Standard Selenium Fallback
-                        # Step A: Select Grade from dropdown at //*[@id="GRADE"] (or grade_xpath)
-                        if grade_val:
-                            safe_select_dropdown(driver, grade_xpath, grade_val, "Grade dropdown", log_func=self._log)
-                            self._log('info', f"Selected Grade '{grade_val}' from dropdown at {grade_xpath}.")
+                    # Step C: Safety check — re-confirm Grade selection in dropdown before submitting
+                    if grade_val:
+                        safe_select_dropdown(driver, grade_xpath, grade_val, "Grade dropdown (safety re-select)", log_func=self._log)
+                        self._log('info', f"Safety re-check: Confirmed Grade '{grade_val}' is selected in dropdown at {grade_xpath} before submit.")
 
-                        # Step B: Input Score into Adjust Score field
-                        if score_val and adjust_score_xpath:
-                            safe_send_keys(driver, wait, adjust_score_xpath, score_val, "Adjust Score field", log_func=self._log)
-                            self._log('info', f"Entered Score '{score_val}' into Adjust Score field.")
-                        elif score_val or not grade_val:
-                            try:
-                                field_xpath, dynamic_submit_xpath, field_label = self._resolve_score_or_grade_field(
-                                    driver, config, student_id
-                                )
-                                if not field_submit_xpath:
-                                    field_submit_xpath = dynamic_submit_xpath
+                    # Step D: Click page-level Submit then Save Class
+                    self._click_submit(driver, wait, config, student_id=student_id)
+                    self._log('info', f"Clicked Submit for Student ID {student_id}.")
+                    self._save_class(driver, wait, config, student_id=student_id)
+                    self._log('info', f"Successfully posted grade ('{grade_val}'), score ('{score_val}'), submitted, and saved class for Student ID {student_id}.")
 
-                                if field_label == "Grade" and not grade_val:
-                                    safe_select_dropdown(driver, field_xpath, score_val, f"{field_label} field", log_func=self._log)
-                                elif field_label == "Adjust Score" and score_val:
-                                    safe_send_keys(driver, wait, field_xpath, score_val, f"{field_label} field", log_func=self._log)
-                            except Exception as res_err:
-                                self._log('info', f"Field resolution note: {res_err}")
-
-                        # Step C: Safety check — re-confirm Grade selection in dropdown before submitting
-                        if grade_val:
-                            safe_select_dropdown(driver, grade_xpath, grade_val, "Grade dropdown (safety re-select)", log_func=self._log)
-                            self._log('info', f"Safety re-check: Confirmed Grade '{grade_val}' is selected in dropdown at {grade_xpath} before submit.")
-
-                        # Step D: Submit final changes
-                        if field_submit_xpath:
-                            safe_click(driver, wait, field_submit_xpath, "Submit button", log_func=self._log)
-                            self._log('info', f"Successfully posted grade ('{grade_val}') and score ('{score_val}') for Student ID {student_id}.")
-                        else:
-                            submit_xpath = config.get("submit_xpath", "")
-                            if submit_xpath:
-                                _submit_end = time.time() + 8
-                                _clicked = False
-                                while time.time() < _submit_end:
-                                    _matches = driver.find_elements(By.XPATH, submit_xpath)
-                                    if _matches:
-                                        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", _matches[0])
-                                        time.sleep(0.15)
-                                        try:
-                                            _matches[0].click()
-                                        except Exception:
-                                            driver.execute_script("arguments[0].click();", _matches[0])
-                                        self._log('info', "Clicked submit button.")
-                                        _clicked = True
-                                        break
-                                    time.sleep(0.3)
-                                if not _clicked:
-                                    raise Exception(f"Submit button not found within 8s after Update (xpath: {submit_xpath})")
-
-                    self._log_csv_status(csv_path, student_id, link, "SUCCESS",
+                    self._log_csv_status(target_csv, student_id, link, "SUCCESS",
                                          f"Updated grade ('{grade_val}') and score ('{score_val}') successfully.")
 
                 row_ok, _, row_err = process_item_with_retry(
@@ -897,7 +868,7 @@ class GradeSubmitter:
                 )
                 if not row_ok and (
                     isinstance(row_err, (BrowserSessionError, TimeoutException))
-                    or is_dead_session_error(row_err)
+                    or (row_err is not None and is_dead_session_error(row_err))
                     or (row_err is not None and is_portal_session_expired(driver))
                 ):
                     if not self._abort():
@@ -1587,8 +1558,9 @@ class GradeSubmitter:
         """
         adjust_score_xpath  = config.get("adjust_score_xpath", "")
         grade_xpath         = config.get("grade_xpath", '//*[@id="GRADE"]')
-        score_submit_xpath  = config.get("score_submit_xpath", config.get("submit_xpath", ""))
-        grade_submit_xpath  = config.get("grade_submit_xpath", "")
+        save_class_xp       = self._get_save_class_xpath(config)
+        score_submit_xpath  = config.get("score_submit_xpath") or save_class_xp
+        grade_submit_xpath  = config.get("grade_submit_xpath") or save_class_xp
 
         # --- LEARNING: Check known field type for this student ---
         known_field = learning_engine.get_student_insight(student_id, 'grade_field_type')
@@ -1621,6 +1593,427 @@ class GradeSubmitter:
             "Could not find either an 'Adjust Score' field or a 'Grade' field after clicking Update."
         )
 
+    def _get_modal_submit_xpath(self, config: dict) -> str:
+        """Return the user-configured XPath to click the *Update* button inside the
+        Edit Status modal, if provided in credentials.
+
+        NOTE: ``submit_xpath`` is intentionally NOT included here — it is reserved
+        for the page-level Submit button clicked *after* the modal closes.
+        Returns empty string if not configured (allowing dynamic semantic detection).
+        """
+        return (
+            config.get("update_xpath")
+            or config.get("modal_submit_xpath")
+            or config.get("edit_modal_submit_xpath")
+            or ""
+        )
+
+    def _get_submit_xpath(self, config: dict) -> str:
+        """Return the user-configured XPath for the page-level Submit button.
+
+        This is the button clicked *after* the Edit Status modal has been closed
+        via Update, and *before* the Save Class button.
+        Returns empty string if not configured (allowing dynamic semantic detection).
+        """
+        return (
+            config.get("submit_xpath")
+            or config.get("score_submit_xpath")
+            or config.get("grade_submit_xpath")
+            or ""
+        )
+
+    def _click_submit(self, driver, wait, config: dict, student_id: str = "") -> bool:
+        """Click the page-level Submit button after the Edit Status modal has closed.
+
+        Dynamically finds the button:
+          1. Explicit XPath from credentials (submit_xpath, score_submit_xpath, grade_submit_xpath).
+          2. Previously learned XPath for this domain from the learning engine ('page_submit_button').
+          3. Semantic selectors targeting Submit buttons on the main page.
+          4. In-browser JS query targeting interactive submit elements.
+        """
+        user_xpath = self._get_submit_xpath(config)
+
+        domain_key = ""
+        try:
+            curr_url = driver.current_url or config.get("url", "")
+            domain_key = learning_engine.extract_domain(curr_url)
+        except Exception:
+            pass
+
+        learned_xpaths = learning_engine.get_learned_xpaths(domain_key, 'page_submit_button') if domain_key else []
+
+        candidate_xpaths = []
+        if user_xpath:
+            candidate_xpaths.append(user_xpath)
+        candidate_xpaths.extend(learned_xpaths)
+
+        # Semantic selectors targeting page-level Submit buttons (NOT inside a modal)
+        candidate_xpaths.extend([
+            "//input[(@type='submit' or @type='button') and (translate(normalize-space(@value), 'SUBMIT', 'submit')='submit' or translate(normalize-space(@value), 'ENVIAR', 'enviar')='enviar')]",
+            "//button[translate(normalize-space(.), 'SUBMIT', 'submit')='submit' or translate(normalize-space(.), 'ENVIAR', 'enviar')='enviar']",
+            "//input[contains(translate(@value, 'SUBMIT', 'submit'), 'submit') and not(@type='hidden')]",
+            "//button[contains(translate(normalize-space(.), 'SUBMIT', 'submit'), 'submit')]",
+            "//a[(contains(@class, 'btn') or @role='button') and contains(translate(normalize-space(.), 'SUBMIT', 'submit'), 'submit')]",
+        ])
+
+        seen = set()
+        unique_candidates = [xp for xp in candidate_xpaths if xp and not (xp in seen or seen.add(xp))]
+
+        _end_time = time.time() + 8.0
+        while time.time() < _end_time:
+            for xp in unique_candidates:
+                try:
+                    elems = driver.find_elements(By.XPATH, xp)
+                    for el in elems:
+                        if el.is_displayed() or el.is_enabled():
+                            try:
+                                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                                time.sleep(0.1)
+                            except Exception:
+                                pass
+                            clicked = False
+                            try:
+                                el.click()
+                                clicked = True
+                            except Exception:
+                                try:
+                                    ActionChains(driver).move_to_element(el).click().perform()
+                                    clicked = True
+                                except Exception:
+                                    pass
+                            if not clicked:
+                                driver.execute_script("""
+                                    var el = arguments[0];
+                                    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+                                    el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+                                    el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                                    if (typeof el.click === 'function') { el.click(); }
+                                    if (el.onclick) { try { el.onclick(); } catch(e) {} }
+                                """, el)
+
+                            self._log('info', f"Clicked page-level Submit button for Student ID {student_id or 'current'}.")
+                            if domain_key:
+                                learning_engine.record_successful_xpath(domain_key, 'page_submit_button', xp)
+                            time.sleep(0.8)
+                            try:
+                                alert = driver.switch_to.alert
+                                a_text = alert.text
+                                alert.accept()
+                                self._log('info', f"Accepted alert after Submit: '{a_text}'")
+                            except Exception:
+                                pass
+                            time.sleep(0.5)
+                            return True
+                except Exception:
+                    continue
+
+            # In-browser dynamic JS lookup for Submit button
+            try:
+                js_click_ok = driver.execute_script("""
+                    var candidates = document.querySelectorAll('input[type="submit"], input[type="button"], button, a.btn, a[role="button"]');
+                    for (var i = 0; i < candidates.length; i++) {
+                        var el = candidates[i];
+                        var val = (el.value || el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().toLowerCase();
+                        if (val === 'submit' || val === 'enviar') {
+                            el.scrollIntoView({block: 'center'});
+                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+                            el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                            try { el.click(); } catch(e) {}
+                            if (el.onclick) { try { el.onclick(); } catch(e2) {} }
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+                if js_click_ok:
+                    self._log('info', f"Clicked page-level Submit button via dynamic DOM inspection for Student ID {student_id or 'current'}.")
+                    time.sleep(0.8)
+                    try:
+                        alert = driver.switch_to.alert
+                        a_text = alert.text
+                        alert.accept()
+                        self._log('info', f"Accepted alert after Submit: '{a_text}'")
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    return True
+            except Exception:
+                pass
+
+            time.sleep(0.3)
+
+        if user_xpath:
+            # User explicitly provided submit_xpath but it didn't work — warn clearly
+            self._log('warning', f"submit_xpath '{user_xpath}' was provided in credentials but could not be clicked for Student ID {student_id or 'current'}. Check that the XPath is correct and the element is visible after the modal closes.")
+        else:
+            self._log('warning', f"Could not locate page-level Submit button for Student ID {student_id or 'current'}. Proceeding to Save Class.")
+        return False
+
+    def _submit_edit_modal(self, driver, wait, config: dict, student_id: str = "") -> bool:
+        """Click the submit/update button inside the Edit Status modal and wait for it to close.
+
+        Dynamically finds the modal's submit button:
+          1. Explicit XPath from credentials (update_xpath, modal_submit_xpath, submit_xpath).
+          2. Previously learned XPath for this domain from the learning engine ('modal_submit_button').
+          3. Semantic selectors targeting buttons inside the modal dialog / popup.
+          4. Broad semantic selectors matching 'Submit', 'Update', 'Save' buttons.
+          5. In-browser JS query targeting interactive submit elements inside the modal.
+        """
+        user_xpath = self._get_modal_submit_xpath(config)
+
+        domain_key = ""
+        try:
+            curr_url = driver.current_url or config.get("url", "")
+            domain_key = learning_engine.extract_domain(curr_url)
+        except Exception:
+            pass
+
+        learned_xpaths = learning_engine.get_learned_xpaths(domain_key, 'modal_submit_button') if domain_key else []
+
+        candidate_xpaths = []
+        if user_xpath:
+            candidate_xpaths.append(user_xpath)
+        candidate_xpaths.extend(learned_xpaths)
+
+        # Semantic selectors targeting the edit modal's submit button
+        candidate_xpaths.extend([
+            # 1. Elements inside modal / popup container
+            "//div[contains(@class, 'modal') or contains(@class, 'dialog') or @role='dialog' or contains(@id, 'modal') or contains(@id, 'dialog') or contains(@id, 'popup')]//input[(@type='submit' or @type='button') and (contains(translate(@value, 'SUBMITUPDATE', 'submitupdate'), 'submit') or contains(translate(@value, 'SUBMITUPDATE', 'submitupdate'), 'update') or contains(translate(@value, 'SUBMITUPDATE', 'submitupdate'), 'save'))]",
+            "//div[contains(@class, 'modal') or contains(@class, 'dialog') or @role='dialog' or contains(@id, 'modal') or contains(@id, 'dialog') or contains(@id, 'popup')]//button[contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'submit') or contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'update') or contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'save')]",
+            "//div[contains(@class, 'modal') or contains(@class, 'dialog') or @role='dialog' or contains(@id, 'modal') or contains(@id, 'dialog') or contains(@id, 'popup')]//input[@type='submit']",
+            "//div[contains(@class, 'modal') or contains(@class, 'dialog') or @role='dialog' or contains(@id, 'modal') or contains(@id, 'dialog') or contains(@id, 'popup')]//button[@type='submit' or not(@type)]",
+            # 2. General submit / update buttons
+            "//input[(@type='submit' or @type='button') and (translate(normalize-space(@value), 'SUBMIT', 'submit')='submit' or translate(normalize-space(@value), 'UPDATE', 'update')='update')]",
+            "//button[translate(normalize-space(.), 'SUBMIT', 'submit')='submit' or translate(normalize-space(.), 'UPDATE', 'update')='update']",
+            "//input[(@type='submit' or @type='button') and (contains(translate(@value, 'SUBMITUPDATE', 'submitupdate'), 'submit') or contains(translate(@value, 'SUBMITUPDATE', 'submitupdate'), 'update'))]",
+            "//button[contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'submit') or contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'update')]",
+            "//a[(contains(@class, 'btn') or @role='button') and (contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'submit') or contains(translate(normalize-space(.), 'SUBMITUPDATE', 'submitupdate'), 'update'))]",
+        ])
+
+        seen = set()
+        unique_candidates = [xp for xp in candidate_xpaths if xp and not (xp in seen or seen.add(xp))]
+
+        _end_time = time.time() + 8.0
+        while time.time() < _end_time:
+            # 1. XPath / semantic candidate search
+            for xp in unique_candidates:
+                try:
+                    elems = driver.find_elements(By.XPATH, xp)
+                    for el in elems:
+                        if el.is_displayed() or el.is_enabled():
+                            try:
+                                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                                time.sleep(0.1)
+                            except Exception:
+                                pass
+                            clicked = False
+                            try:
+                                el.click()
+                                clicked = True
+                            except Exception:
+                                try:
+                                    ActionChains(driver).move_to_element(el).click().perform()
+                                    clicked = True
+                                except Exception:
+                                    pass
+                            if not clicked:
+                                driver.execute_script("""
+                                    var el = arguments[0];
+                                    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+                                    el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+                                    el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                                    if (typeof el.click === 'function') { el.click(); }
+                                    if (el.onclick) { try { el.onclick(); } catch(e) {} }
+                                """, el)
+
+                            self._log('info', f"Clicked submit button in Edit Modal for Student ID {student_id or 'current'}.")
+                            if domain_key:
+                                learning_engine.record_successful_xpath(domain_key, 'modal_submit_button', xp)
+                            time.sleep(0.8)
+                            try:
+                                alert = driver.switch_to.alert
+                                a_text = alert.text
+                                alert.accept()
+                                self._log('info', f"Accepted alert after modal submit: '{a_text}'")
+                            except Exception:
+                                pass
+                            time.sleep(0.5)
+                            return True
+                except Exception:
+                    continue
+
+            # 2. In-browser dynamic JS lookup targeting modal submit buttons
+            try:
+                js_click_ok = driver.execute_script("""
+                    var modalSelectors = [
+                        '.modal', '.dialog', '[role="dialog"]', '#modal', '#dialog', '.popup', '#popup',
+                        '.ui-dialog', '.modal-dialog', '.modal-content'
+                    ];
+                    var modalContainer = null;
+                    for (var s = 0; s < modalSelectors.length; s++) {
+                        var found = document.querySelector(modalSelectors[s]);
+                        if (found && (found.offsetWidth > 0 || found.offsetHeight > 0)) {
+                            modalContainer = found;
+                            break;
+                        }
+                    }
+                    var root = modalContainer || document;
+                    var candidates = root.querySelectorAll('input[type="submit"], input[type="button"], button, a.btn, a[role="button"]');
+                    for (var i = 0; i < candidates.length; i++) {
+                        var el = candidates[i];
+                        var val = (el.value || el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().toLowerCase();
+                        if (val === 'submit' || val === 'update' || val.indexOf('submit') !== -1 || val.indexOf('update') !== -1 || val.indexOf('save') !== -1) {
+                            el.scrollIntoView({block: 'center'});
+                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+                            el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                            try { el.click(); } catch(e) {}
+                            if (el.onclick) { try { el.onclick(); } catch(e2) {} }
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+                if js_click_ok:
+                    self._log('info', f"Clicked submit button in Edit Modal via dynamic DOM inspection for Student ID {student_id or 'current'}.")
+                    time.sleep(0.8)
+                    try:
+                        alert = driver.switch_to.alert
+                        a_text = alert.text
+                        alert.accept()
+                        self._log('info', f"Accepted alert after modal submit: '{a_text}'")
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    return True
+            except Exception:
+                pass
+
+            time.sleep(0.3)
+
+        self._log('warning', f"Could not locate or click submit button in Edit Modal for Student ID {student_id or 'current'}.")
+        return False
+
+    def _get_save_class_xpath(self, config: dict) -> str:
+        """Return the user-configured XPath to save the class, if provided in credentials.
+
+        Returns empty string if not configured (allowing dynamic semantic detection).
+        """
+        return (
+            config.get("save_class_xpath")
+            or config.get("class_save_xpath")
+            or config.get("save_xpath")
+            or ""
+        )
+
+    def _save_class(self, driver, wait, config: dict, student_id: str = "") -> bool:
+        """Save the class form so all submitted student grades, scores, and status updates persist.
+
+        Dynamically finds the 'Save' button without hard-coded XPaths:
+          1. Explicit XPath from credentials (if configured by user).
+          2. Previously learned XPath for this domain from the learning engine.
+          3. Dynamic semantic discovery: locates any input, button, or link on the page
+             whose value, text, or label matches 'Save' / 'Save Class' / 'Save Changes'.
+          4. In-browser JS execution to query and trigger the Save control directly.
+        """
+        user_xpath = self._get_save_class_xpath(config)
+
+        # Check learned XPaths from learning system
+        domain_key = ""
+        try:
+            curr_url = driver.current_url or config.get("url", "")
+            domain_key = learning_engine.extract_domain(curr_url)
+        except Exception:
+            pass
+
+        learned_xpaths = learning_engine.get_learned_xpaths(domain_key, 'save_class_button') if domain_key else []
+
+        candidate_xpaths = []
+        if user_xpath:
+            candidate_xpaths.append(user_xpath)
+        candidate_xpaths.extend(learned_xpaths)
+
+        # Semantic selectors based on the button's purpose ('Save'), not fixed DOM hierarchy
+        candidate_xpaths.extend([
+            "//input[(@type='submit' or @type='button') and (translate(normalize-space(@value), 'SAVE', 'save')='save' or contains(translate(@value, 'SAVE', 'save'), 'save class') or contains(translate(@value, 'SAVE', 'save'), 'save grade'))]",
+            "//button[translate(normalize-space(.), 'SAVE', 'save')='save' or contains(translate(normalize-space(.), 'SAVE', 'save'), 'save class') or contains(translate(normalize-space(.), 'SAVE', 'save'), 'save grade')]",
+            "//input[translate(normalize-space(@value), 'SAVE', 'save')='save' and not(@type='hidden')]",
+            "//input[contains(translate(@value, 'SAVE', 'save'), 'save') and not(@type='hidden')]",
+            "//button[contains(translate(normalize-space(.), 'SAVE', 'save'), 'save')]",
+            "//a[(contains(@class, 'btn') or contains(@class, 'button') or @role='button') and contains(translate(normalize-space(.), 'SAVE', 'save'), 'save')]",
+            "//*[@role='button'][translate(normalize-space(.), 'SAVE', 'save')='save']",
+        ])
+
+        seen = set()
+        unique_candidates = [xp for xp in candidate_xpaths if xp and not (xp in seen or seen.add(xp))]
+
+        _end_time = time.time() + 7.0
+        while time.time() < _end_time:
+            # 1. XPath / semantic candidate search
+            for xp in unique_candidates:
+                try:
+                    elems = driver.find_elements(By.XPATH, xp)
+                    for el in elems:
+                        if el.is_displayed() or el.is_enabled():
+                            try:
+                                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                                time.sleep(0.1)
+                            except Exception:
+                                pass
+                            try:
+                                el.click()
+                            except Exception:
+                                driver.execute_script("arguments[0].click();", el)
+                            self._log('info', f"Clicked Save Class button for Student ID {student_id or 'current'}.")
+                            if domain_key:
+                                learning_engine.record_successful_xpath(domain_key, 'save_class_button', xp)
+                            time.sleep(0.8)
+                            try:
+                                alert = driver.switch_to.alert
+                                a_text = alert.text
+                                alert.accept()
+                                self._log('info', f"Accepted browser alert after Save Class: '{a_text}'")
+                            except Exception:
+                                pass
+                            return True
+                except Exception:
+                    continue
+
+            # 2. Dynamic in-browser JS query for any button/input matching 'Save'
+            try:
+                js_click_ok = driver.execute_script("""
+                    var candidates = document.querySelectorAll('input[type="submit"], input[type="button"], button, a.btn, a[role="button"]');
+                    for (var i = 0; i < candidates.length; i++) {
+                        var el = candidates[i];
+                        var val = (el.value || el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().toLowerCase();
+                        if (val === 'save' || val.indexOf('save class') !== -1 || val.indexOf('save grade') !== -1 || val.indexOf('save changes') !== -1) {
+                            el.scrollIntoView({block: 'center'});
+                            try { el.click(); } catch(e) { if (el.onclick) el.onclick(); }
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+                if js_click_ok:
+                    self._log('info', f"Clicked Save Class button via dynamic DOM inspection for Student ID {student_id or 'current'}.")
+                    time.sleep(0.8)
+                    try:
+                        alert = driver.switch_to.alert
+                        a_text = alert.text
+                        alert.accept()
+                        self._log('info', f"Accepted browser alert after Save Class: '{a_text}'")
+                    except Exception:
+                        pass
+                    return True
+            except Exception:
+                pass
+
+            time.sleep(0.3)
+
+        self._log('warning', "Could not locate Save Class button dynamically. Changes may not persist if unsaved.")
+        return False
+
     def _log_csv_status(self, csv_path: str, student_id: str, link: str, status: str, details: str):
         """Append a result row to the per-run timestamped CSV and update the
         cumulative master ``execution_results.csv`` in the same directory.
@@ -1635,21 +2028,30 @@ class GradeSubmitter:
         csv_log_file = os.path.join(base_dir, f"execution_results_{run_id}.csv")
         master_log_file = os.path.join(base_dir, "execution_results.csv")
         # Use per-instance lock if set by parallel coordinator, else the global lock
-        lock = getattr(self, '_csv_lock', _csv_write_lock)
+        lock = getattr(self, '_csv_lock', None) or _csv_write_lock
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row = [ts, student_id, link, status, details]
         header = ["Timestamp", "StudentId", "Link", "Status", "Details"]
         try:
-            with lock:
-                # 1. Per-run timestamped log (append-only)
+            if lock:
+                with lock:
+                    # 1. Per-run timestamped log (append-only)
+                    file_exists = os.path.isfile(csv_log_file)
+                    with open(csv_log_file, "a", newline="") as f:
+                        writer = csv.writer(f)
+                        if not file_exists:
+                            writer.writerow(header)
+                        writer.writerow(row)
+
+                    # 2. Cumulative master log (upsert by StudentId + Link)
+                    _update_master_csv(master_log_file, header, student_id, link, row)
+            else:
                 file_exists = os.path.isfile(csv_log_file)
                 with open(csv_log_file, "a", newline="") as f:
                     writer = csv.writer(f)
                     if not file_exists:
                         writer.writerow(header)
                     writer.writerow(row)
-
-                # 2. Cumulative master log (upsert by StudentId + Link)
                 _update_master_csv(master_log_file, header, student_id, link, row)
         except Exception as e:
             self._log('error', f"Error appending to CSV log: {e}")

@@ -34,7 +34,8 @@ Built with Python, PySide6 (Qt for Python), Selenium, and `pdfplumber`, the suit
   - [📤 Module 2: File Uploader](#-module-2-file-uploader)
   - [🎓 Module 3: Grade Submission](#-module-3-grade-submission)
   - [📄 Module 4: PDF → Excel Extractor](#-module-4-pdf--excel-extractor)
-  - [🧠 Module 5: Adaptive Learning & Self-Optimization](#-module-5-adaptive-learning--self-optimization)
+  - [🔄 Module 5: Adaptive Dataset Harmonizer](#-module-5-adaptive-dataset-harmonizer)
+  - [🧠 Module 6: Adaptive Learning & Self-Optimization](#-module-6-adaptive-learning--self-optimization)
 - [Building the Windows Executable](#-building-the-windows-executable)
 - [Troubleshooting & Best Practices](#-troubleshooting--best-practices)
 
@@ -59,7 +60,8 @@ The **Unified System Automation Suite** replaces these repetitive manual tasks w
 | **📤 Batch File Uploader** | Navigates student profile folders and batch-uploads categorized local files directly into portal document systems. |
 | **🎓 Dynamic Grade Submission** | Submits final grade flags, dates, and scores with automatic detection between score input fields and grade dropdowns. |
 | **📄 PDF → Excel Extractor** | Parses folders of identically formatted PDFs (transcripts, schedules, ledgers) into structured `.xlsx` workbooks using JSON recipes. |
-| **🧠 Adaptive Learning Engine** | Learns fast XPaths, domain quirks (such as DevTools requirements), and student profile placements to speed up subsequent runs. |
+| **🔄 Adaptive Dataset Harmonizer** | Multi-source schema matcher and combiner (Union/Join) that reshapes raw datasets to match sample schemas with persistent feedback learning. |
+| **🧠 Adaptive Learning Engine** | Learns fast XPaths, domain quirks, and dataset column associations across runs to accelerate and automate transformations. |
 | **🖥️ Modern Desktop GUI** | Collapsible navigation, dark mode, real-time KPI metrics, execution logs, and interactive visual PDF configuration preview. |
 
 ---
@@ -73,6 +75,7 @@ graph TD
     B --> D[File Uploader Module]
     B --> E[Grade Submission Module]
     B --> F[PDF -> Excel Extractor]
+    B --> K[Adaptive Dataset Harmonizer]
     B --> G[Adaptive Learning Insights]
     B --> H[Settings & Configuration]
     
@@ -309,12 +312,34 @@ Converts batches of unstructured or semi-structured PDF documents into a clean E
 
 ---
 
-### 🧠 Module 5: Adaptive Learning & Self-Optimization
+### 🔄 Module 5: Adaptive Dataset Harmonizer
+Takes one or multiple raw datasets (CSV, Excel, JSON, SQLite database) and a target sample dataset, aligns and transforms the raw data to match the sample format, and continuously learns user corrections.
+1. Open **Data Harmonizer** from the navigation sidebar.
+2. **Upload Raw Datasets or Database**: Click **`+ Add Raw Files`** (supports multiple CSVs, Excels, JSONs, or SQLite databases).
+3. **Choose Combine Mode**:
+   - **`Auto-Detect (Smart)`**: Automatically decides between Union and Relational Join based on column overlaps and key distributions.
+   - **`Smart Union`**: Stacks rows across homogeneous files and aligns slight column naming variations.
+   - **`Smart Join`**: Automatically infers candidate primary/foreign keys based on Jaccard value overlap and merges tables relationally.
+4. **Upload Sample Dataset**: Click **`Upload Sample Dataset`** (the gold standard format you want the output to conform to).
+5. Click **`⚡ Align Schemas & Auto-Match Mappings`**:
+   - The engine profiles data types, datetime formats, currencies, and computes multi-tier confidence scores.
+   - Evaluates composite fields (e.g., auto-detects `First Name` + `Last Name` $\rightarrow$ `Full Name`).
+6. **Review & Adjust**:
+   - Interactive table displays confidence badges (🟢 High $\ge 85\%$, 🟡 Review $50-84\%$, 🔴 Unmapped $<50\%$).
+   - Change any source column or transformation rule using editable dropdowns; previews update instantly in real time.
+7. **Export & Learn**:
+   - Select output format (CSV, Excel, JSON, SQLite) and click **`🚀 Transform & Export Harmonized Data`**.
+   - With **`Save & reinforce learned column associations`** checked, the system stores confirmed mappings and dataset fingerprints in `learning_data.json`, automating future runs with 100% confidence.
+
+---
+
+### 🧠 Module 6: Adaptive Learning & Self-Optimization
 The suite learns as it runs to become faster and more reliable:
 - **XPath Success Weights**: Ranks selectors based on historical speed and success rates.
 - **Domain Latencies**: Tracks page load speeds per domain to calibrate intelligent wait times.
+- **Data Harmonizer Mappings**: Remembers confirmed column associations and dataset fingerprints.
 - **DevTools Prediction**: Detects if specific web portals require Chrome DevTools open to render certain components and applies this setting automatically.
-- Open **Learning Insights** to view current speed metrics, success rates, and time-series performance graphs.
+- Open **Learning Insights** to view current speed metrics, success rates, harmonizer mapping memory, and time-series performance graphs.
 
 ---
 

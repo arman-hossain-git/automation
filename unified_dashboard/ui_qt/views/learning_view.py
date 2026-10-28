@@ -133,6 +133,11 @@ class LearningView(QWidget):
         self._build_pdf_tab()
         self.notebook.addTab(self.tab_pdf, " 🧾 PDF Extractor Profiles ")
 
+        # Tab 6: Data Harmonizer Mappings
+        self.tab_harmonizer = QWidget()
+        self._build_harmonizer_tab()
+        self.notebook.addTab(self.tab_harmonizer, " 🔄 Harmonizer Mappings ")
+
         # Auto-refresh timer
         self._timer = QTimer(self)
         self._timer.setInterval(5000)
@@ -151,12 +156,12 @@ class LearningView(QWidget):
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setAlternatingRowColors(False)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setSelectionMode(QTableWidget.SingleSelection)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         if len(headers) > 1:
-            table.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.ResizeMode.Stretch)
 
     def _build_history_tab(self):
         layout = QVBoxLayout(self.tab_history)
@@ -205,6 +210,13 @@ class LearningView(QWidget):
         self._setup_table(self.table_pdf, ["Preset / Profile Name", "Confidence Score", "Learned Rules Count", "Verified Samples"])
         layout.addWidget(self.table_pdf)
 
+    def _build_harmonizer_tab(self):
+        layout = QVBoxLayout(self.tab_harmonizer)
+        layout.setContentsMargins(8, 8, 8, 8)
+        self.table_harmonizer = QTableWidget()
+        self._setup_table(self.table_harmonizer, ["Source Column", "Target Column (Sample)", "Confirmed Hits", "Rejections", "Confidence", "Rule"])
+        layout.addWidget(self.table_harmonizer)
+
     # ------------------------------------------------------------------
     # Data Refreshing
     # ------------------------------------------------------------------
@@ -227,6 +239,7 @@ class LearningView(QWidget):
         self._refresh_students()
         self._refresh_devtools()
         self._refresh_pdf()
+        self._refresh_harmonizer()
 
     def _refresh_history(self):
         try:
@@ -329,6 +342,30 @@ class LearningView(QWidget):
                 it = QTableWidgetItem(val)
                 it.setForeground(Qt.white)
                 self.table_pdf.setItem(r_idx, c_idx, it)
+
+    def _refresh_harmonizer(self):
+        try:
+            h_data = learning_engine._data.get("data_harmonizer_profiles", {})
+            assocs = h_data.get("column_associations", {})
+        except Exception:
+            assocs = {}
+
+        rows = []
+        for src, tgts in assocs.items():
+            for tgt, stats in tgts.items():
+                conf_hits = stats.get("confirmed", 0)
+                rejections = stats.get("rejected", 0)
+                total = conf_hits + rejections
+                conf_str = f"{(conf_hits / total * 100):.0f}%" if total > 0 else "0%"
+                rule = stats.get("rule", "direct")
+                rows.append((src, tgt, str(conf_hits), str(rejections), conf_str, rule))
+
+        self.table_harmonizer.setRowCount(len(rows))
+        for r_idx, (src, tgt, hits, rejs, conf, rule) in enumerate(rows):
+            for c_idx, val in enumerate([src, tgt, hits, rejs, conf, rule]):
+                it = QTableWidgetItem(val)
+                it.setForeground(Qt.white)
+                self.table_harmonizer.setItem(r_idx, c_idx, it)
 
     # ------------------------------------------------------------------
     # Actions

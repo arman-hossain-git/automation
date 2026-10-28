@@ -21,7 +21,8 @@ class InterTaskDialog(QDialog):
     Counts down from timeout_minutes (e.g. 15 min).
     """
 
-    def __init__(self, parent, task_label: str, completed_idx: int, total_count: int, timeout_minutes: int = 15):
+    def __init__(self, parent, task_label: str, completed_idx: int, total_count: int,
+                 timeout_minutes: int = 15, inactivity_action: str = "close_app"):
         super().__init__(parent)
         self.setWindowTitle("Task Completed — Verification & Next Step")
         self.setFixedSize(620, 520)
@@ -30,6 +31,7 @@ class InterTaskDialog(QDialog):
         self.choice = 3  # Default: Proceed immediately to next queued task
         self.timeout_occurred = False
         self.seconds_remaining = int(timeout_minutes * 60)
+        self.inactivity_action = inactivity_action
 
         self._build_ui(task_label, completed_idx, total_count)
 
@@ -67,19 +69,39 @@ class InterTaskDialog(QDialog):
         t_layout.setSpacing(4)
 
         lbl_timer_title = QLabel("⏱️  INACTIVITY COUNTDOWN TIMER")
-        lbl_timer_title.setAlignment(Qt.AlignCenter)
+        lbl_timer_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_timer_title.setStyleSheet(f"font-size: 11px; font-weight: 700; color: {TEXT_MUTED}; letter-spacing: 0.5px; border: none;")
 
         self.lbl_timer = QLabel("")
-        self.lbl_timer.setAlignment(Qt.AlignCenter)
+        self.lbl_timer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_timer.setStyleSheet(f"font-size: 26px; font-weight: 800; color: {ACCENT_PRIMARY}; border: none;")
         self._update_timer_label()
 
-        lbl_timer_sub = QLabel(
+        action_descriptions = {
+            "close_app": (
+                "If no action is selected before the countdown reaches 0:00, the system safely\n"
+                "assumes you are away from your desk, stops automation, and safely closes the application."
+            ),
+            "pause_queue": (
+                "If no action is selected before the countdown reaches 0:00, the system safely\n"
+                "pauses execution and waits for you to resume."
+            ),
+            "proceed_next": (
+                "If no action is selected before the countdown reaches 0:00, the system automatically\n"
+                "proceeds to execute the next queued task."
+            ),
+            "stop_automation": (
+                "If no action is selected before the countdown reaches 0:00, the system stops\n"
+                "automation and cancels remaining tasks while keeping the application open."
+            ),
+        }
+        sub_text = action_descriptions.get(
+            self.inactivity_action,
             "If no action is selected before the countdown reaches 0:00, the system safely\n"
-            "assumes you are away from your desk, pauses execution, and safely closes."
+            "assumes you are away from your desk and safely closes."
         )
-        lbl_timer_sub.setAlignment(Qt.AlignCenter)
+        lbl_timer_sub = QLabel(sub_text)
+        lbl_timer_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_timer_sub.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
 
         t_layout.addWidget(lbl_timer_title)
@@ -100,7 +122,7 @@ class InterTaskDialog(QDialog):
             b_layout.setSpacing(2)
 
             btn = QPushButton(title)
-            btn.setCursor(Qt.PointingHandCursor)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {color_hex};
@@ -134,7 +156,6 @@ class InterTaskDialog(QDialog):
         if self.seconds_remaining <= 0:
             self._timer.stop()
             self.timeout_occurred = True
-            self.choice = 4  # Timeout abort
             self.accept()
             return
         self._update_timer_label()

@@ -20,8 +20,12 @@ from ui.pdf_extractor_ui import PdfExtractorUI
 from ui.documentation_ui import DocumentationUI
 from ui.settings_ui import SettingsUI
 from ui.learning_ui import LearningUI
+from ui.field_updater_ui import FieldUpdaterUI
+from ui.student_removal_ui import StudentRemovalUI
 
-TOOLS = [
+from typing import Any
+
+TOOLS: list[dict[str, Any]] = [
     {
         "id": "home",
         "title": "Home",
@@ -71,6 +75,32 @@ TOOLS = [
             },
         ],
         "class": GradeUI,
+    },
+    {
+        "id": "student_removal",
+        "title": "Student Removal",
+        "subtitle": "Remove students from class & save",
+        "icon": "🗑️",
+        "instructions": (
+            "1. Select a credentials file.\n"
+            "2. Choose a CSV with columns: studentId, link.\n"
+            "3. Set the number of parallel workers.\n"
+            "4. Click ▶ Start Automation."
+        ),
+        "class": StudentRemovalUI,
+    },
+    {
+        "id": "field_updater",
+        "title": "Field Updater",
+        "subtitle": "Bulk-update page fields from a CSV",
+        "icon": "✏️",
+        "instructions": (
+            "1. Select a credentials file.\n"
+            "2. Choose a CSV with columns: link, field_1, value_1, field_2, value_2 …\n"
+            "3. Set the number of parallel workers.\n"
+            "4. Click ▶ Start Automation."
+        ),
+        "class": FieldUpdaterUI,
     },
     {
         "id": "pdf_extractor",

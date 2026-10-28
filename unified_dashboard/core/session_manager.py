@@ -314,6 +314,8 @@ class SessionManager:
                 except Exception:
                     pass
 
+    end_session = clear_session
+
     @classmethod
     def _save(cls, module_id: str, data: dict):
         session_file = cls.get_session_file(module_id)

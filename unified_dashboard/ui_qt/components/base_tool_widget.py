@@ -493,7 +493,7 @@ class BaseToolWidget(QWidget):
         layout.addWidget(lbl_path, stretch=1)
 
         btn_browse = QPushButton("Browse...")
-        btn_browse.setCursor(Qt.PointingHandCursor)
+        btn_browse.setCursor(Qt.CursorShape.PointingHandCursor)
 
         def on_browse():
             if is_directory:
@@ -537,7 +537,7 @@ class BaseToolWidget(QWidget):
             self._activity_logger.write(level, message)
 
         # Move cursor to end
-        self.txt_console.moveCursor(QTextCursor.End)
+        self.txt_console.moveCursor(QTextCursor.MoveOperation.End)
         tf = QTextCharFormat()
 
         # Timestamp
@@ -547,17 +547,17 @@ class BaseToolWidget(QWidget):
 
         # Tag
         tf.setForeground(QColor(color))
-        tf.setFontWeight(QFont.Bold)
+        tf.setFontWeight(QFont.Weight.Bold)
         self.txt_console.setCurrentCharFormat(tf)
         self.txt_console.insertPlainText(f"[{level.upper()}] ")
 
         # Message
         tf.setForeground(QColor("#D4D4D4"))
-        tf.setFontWeight(QFont.Normal)
+        tf.setFontWeight(QFont.Weight.Normal)
         self.txt_console.setCurrentCharFormat(tf)
         self.txt_console.insertPlainText(f"{message}\n")
 
-        self.txt_console.moveCursor(QTextCursor.End)
+        self.txt_console.moveCursor(QTextCursor.MoveOperation.End)
 
     def clear_console(self):
         self.txt_console.clear()
@@ -1347,9 +1347,9 @@ class BaseToolWidget(QWidget):
 
     @Slot(bool, str)
     def _on_task_finished(self, success: bool, error_msg: str):
-        if self.current_task_idx < len(self.queue):
-            task = self.queue[self.current_task_idx]
-            task.status = "Completed" if success else "Failed"
+        current_task = self.queue[self.current_task_idx] if self.current_task_idx < len(self.queue) else None
+        if current_task:
+            current_task.status = "Completed" if success else "Failed"
             if not success:
                 self.errors_count += 1
                 self.card_errors.set_value(str(self.errors_count))
@@ -1358,33 +1358,62 @@ class BaseToolWidget(QWidget):
         # If there are more tasks in the queue, show the InterTaskDialog
         has_more = (self.current_task_idx + 1) < len(self.queue)
         if has_more and not self.is_paused:
+            inactivity_action = settings.get("inter_task_inactivity_action", "close_app")
             dlg = InterTaskDialog(
                 self,
-                task_label=task.label,
+                task_label=current_task.label if current_task else "",
                 completed_idx=self.current_task_idx + 1,
                 total_count=len(self.queue),
-                timeout_minutes=int(settings.get("inter_task_timeout_minutes", 15))
+                timeout_minutes=int(settings.get("inter_task_timeout_minutes", 15)),
+                inactivity_action=inactivity_action
             )
             dlg.exec()
-            choice = dlg.choice
 
-            if choice == 1:  # Verify and discard next
-                task.verified = True
-                self.log("Task verified by user. Discarding remaining queued tasks.", "INFO")
-                for remaining in self.queue[self.current_task_idx + 1:]:
-                    remaining.status = "Discarded"
-                self.finish_all_tasks()
-                return
-            elif choice == 2:  # Pause queue
-                self.is_paused = True
-                self.badge_status.set_variant("warning", "Paused")
-                self.btn_pause.setText("▶ Resume")
-                self.log("Queue paused by user. Click Resume to continue.", "WARNING")
-                return
-            elif choice == 4:  # Abort all
-                self.log("Execution aborted by user or timeout.", "DANGER")
-                self.stop_automation()
-                return
+            if dlg.timeout_occurred:
+                self.log(f"[QUEUE] Inactivity countdown reached 0:00 (User Away). Action: {inactivity_action}", "WARNING")
+                if inactivity_action == "close_app":
+                    self.log("Closing application safely due to inactivity session timeout.", "WARNING")
+                    self.stop_automation()
+                    from PySide6.QtCore import QTimer
+                    from PySide6.QtWidgets import QApplication
+                    app = QApplication.instance()
+                    if app:
+                        QTimer.singleShot(150, app.quit)
+                    return
+                elif inactivity_action == "pause_queue":
+                    self.is_paused = True
+                    self.badge_status.set_variant("warning", "Paused (Inactivity)")
+                    self.btn_pause.setText("▶ Resume")
+                    self.log("Queue paused due to inactivity session timeout. Click Resume to continue.", "WARNING")
+                    return
+                elif inactivity_action == "stop_automation":
+                    self.log("Execution stopped and remaining tasks cancelled due to inactivity session timeout.", "DANGER")
+                    self.stop_automation()
+                    return
+                elif inactivity_action == "proceed_next":
+                    self.log("Automatically proceeding to next task due to inactivity session timeout.", "INFO")
+                    # Fall through to advance to next task
+            else:
+                choice = dlg.choice
+
+                if choice == 1:  # Verify and discard next
+                    if current_task:
+                        current_task.verified = True
+                    self.log("Task verified by user. Discarding remaining queued tasks.", "INFO")
+                    for remaining in self.queue[self.current_task_idx + 1:]:
+                        remaining.status = "Discarded"
+                    self.finish_all_tasks()
+                    return
+                elif choice == 2:  # Pause queue
+                    self.is_paused = True
+                    self.badge_status.set_variant("warning", "Paused")
+                    self.btn_pause.setText("▶ Resume")
+                    self.log("Queue paused by user. Click Resume to continue.", "WARNING")
+                    return
+                elif choice == 4:  # Abort all
+                    self.log("Execution aborted by user.", "DANGER")
+                    self.stop_automation()
+                    return
 
         # Advance
         self.current_task_idx += 1

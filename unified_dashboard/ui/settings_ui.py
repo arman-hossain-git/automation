@@ -24,6 +24,14 @@ THEME_MAP = {
 }
 REV_THEME_MAP = {v: k for k, v in THEME_MAP.items()}
 
+INACTIVITY_ACTION_MAP = {
+    "Close Application (Safely exit)": "close_app",
+    "Pause Queue (Wait for user to resume)": "pause_queue",
+    "Proceed with Next Task (Continue automatically)": "proceed_next",
+    "Stop Automation (Abort remaining tasks)": "stop_automation",
+}
+REV_INACTIVITY_ACTION_MAP = {v: k for k, v in INACTIVITY_ACTION_MAP.items()}
+
 
 class SettingsUI(tk.Frame):
     """System Settings View Panel."""
@@ -42,6 +50,8 @@ class SettingsUI(tk.Frame):
         self.confirm_abort_var = tk.BooleanVar(value=settings.get("confirm_on_abort"))
         self.auto_apply_devtools_var = tk.BooleanVar(value=settings.get("auto_apply_learned_devtools", True))
         self.inter_task_timeout_var = tk.StringVar(value=str(settings.get("inter_task_timeout_minutes", 15)))
+        cur_inact = settings.get("inter_task_inactivity_action", "close_app")
+        self.inactivity_action_var = tk.StringVar(value=REV_INACTIVITY_ACTION_MAP.get(cur_inact, "Close Application (Safely exit)"))
 
         cur_theme_code = settings.get("theme", "system")
         self.theme_var = tk.StringVar(value=REV_THEME_MAP.get(cur_theme_code, "Same as Local PC (System)"))
@@ -169,38 +179,46 @@ class SettingsUI(tk.Frame):
 
         tk.Label(container, text="Inter-Task Inactivity Timeout (minutes):", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=9, column=0, sticky="w", pady=6)
         tk.Spinbox(container, from_=1, to=120, width=8, textvariable=self.inter_task_timeout_var, bg=BG_CARD_ALT, fg=TEXT_PRIMARY).grid(row=9, column=1, sticky="w", padx=10, pady=6)
+
+        tk.Label(container, text="Action on Inactivity Timeout:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=10, column=0, sticky="w", pady=6)
+        cmb_inactivity = ttk.Combobox(
+            container, textvariable=self.inactivity_action_var,
+            values=list(INACTIVITY_ACTION_MAP.keys()),
+            state="readonly", width=38
+        )
+        cmb_inactivity.grid(row=10, column=1, sticky="w", padx=10, pady=6)
+
         tk.Label(
             container,
-            text="Waiting time between queued tasks. If no verification action is selected in the popup\n"
-                 "before this time expires, the system assumes you are away, stops execution, and closes.",
+            text="Action to execute when inter-task countdown reaches 0:00 (e.g. user away from desk).",
             font=FONT_BODY, fg=TEXT_SECONDARY, bg=BG_CARD, justify="left", anchor="w"
-        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
         # 3. Appearance & Color Scheme (Live Theme Switching)
-        tk.Label(container, text="System Color Scheme / Theme:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=11, column=0, sticky="w", pady=6)
+        tk.Label(container, text="System Color Scheme / Theme:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=12, column=0, sticky="w", pady=6)
         cmb_theme = ttk.Combobox(
             container, textvariable=self.theme_var,
             values=["Same as Local PC (System)", "Dark Mode", "Light Mode"],
             state="readonly", width=26
         )
-        cmb_theme.grid(row=11, column=1, sticky="w", padx=10, pady=6)
+        cmb_theme.grid(row=12, column=1, sticky="w", padx=10, pady=6)
         cmb_theme.bind("<<ComboboxSelected>>", self._on_theme_change)
 
         # 4. Logging & General
-        tk.Label(container, text="Log Console Verbosity Level:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=12, column=0, sticky="w", pady=6)
+        tk.Label(container, text="Log Console Verbosity Level:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=13, column=0, sticky="w", pady=6)
         cmb_log = ttk.Combobox(container, textvariable=self.log_level_var, values=["DEBUG", "INFO", "WARNING", "ERROR"], state="readonly", width=12)
-        cmb_log.grid(row=12, column=1, sticky="w", padx=10, pady=6)
+        cmb_log.grid(row=13, column=1, sticky="w", padx=10, pady=6)
 
         tk.Checkbutton(
             container, text="Ask for confirmation before aborting running automation",
             variable=self.confirm_abort_var, font=FONT_BODY_BOLD,
             fg=TEXT_PRIMARY, bg=BG_CARD, selectcolor=BG_CARD, activebackground=BG_CARD
-        ).grid(row=13, column=0, columnspan=2, sticky="w", pady=6)
+        ).grid(row=14, column=0, columnspan=2, sticky="w", pady=6)
 
         # 5. Default Download Directory
-        tk.Label(container, text="Default Download Directory:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=14, column=0, sticky="w", pady=8)
+        tk.Label(container, text="Default Download Directory:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD, anchor="w").grid(row=15, column=0, sticky="w", pady=8)
         dir_frame = tk.Frame(container, bg=BG_CARD)
-        dir_frame.grid(row=14, column=1, sticky="w", padx=10, pady=8)
+        dir_frame.grid(row=15, column=1, sticky="w", padx=10, pady=8)
 
         tk.Entry(dir_frame, textvariable=self.default_dir_var, width=40, bg=BG_CARD_ALT, fg=TEXT_PRIMARY, insertbackground="white").pack(side="left", padx=(0, 8))
         tk.Button(dir_frame, text="Browse...", font=FONT_BODY, bg=BG_CARD_ALT, fg=TEXT_PRIMARY, bd=0, padx=8, pady=2, command=self._browse_default_dir).pack(side="left")
@@ -232,6 +250,7 @@ class SettingsUI(tk.Frame):
             settings.set("confirm_on_abort", self.confirm_abort_var.get())
             settings.set("auto_apply_learned_devtools", self.auto_apply_devtools_var.get())
             settings.set("inter_task_timeout_minutes", int(self.inter_task_timeout_var.get()))
+            settings.set("inter_task_inactivity_action", INACTIVITY_ACTION_MAP.get(self.inactivity_action_var.get(), "close_app"))
 
             theme_code = THEME_MAP.get(self.theme_var.get(), "system")
             settings.set("theme", theme_code)
@@ -259,6 +278,8 @@ class SettingsUI(tk.Frame):
             self.confirm_abort_var.set(settings.get("confirm_on_abort"))
             self.auto_apply_devtools_var.set(settings.get("auto_apply_learned_devtools", True))
             self.inter_task_timeout_var.set(str(settings.get("inter_task_timeout_minutes", 15)))
+            cur_inact = settings.get("inter_task_inactivity_action", "close_app")
+            self.inactivity_action_var.set(REV_INACTIVITY_ACTION_MAP.get(cur_inact, "Close Application (Safely exit)"))
 
             cur_theme_code = settings.get("theme", "system")
             self.theme_var.set(REV_THEME_MAP.get(cur_theme_code, "Same as Local PC (System)"))

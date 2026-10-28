@@ -67,52 +67,52 @@ class FieldsTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return len(self.HEADERS)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             if section < len(self.HEADERS):
                 return self.HEADERS[section]
-        if role == Qt.ToolTipRole and orientation == Qt.Horizontal and section == 0:
+        if role == Qt.ItemDataRole.ToolTipRole and orientation == Qt.Orientation.Horizontal and section == 0:
             return "Click checkbox to mark field as correct"
         return None
 
     def flags(self, index):
         if not index.isValid():
-            return Qt.NoItemFlags
-        default_flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            return Qt.ItemFlag.NoItemFlags
+        default_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if index.column() == 0:
-            return default_flags | Qt.ItemIsUserCheckable
+            return default_flags | Qt.ItemFlag.ItemIsUserCheckable
         return default_flags
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._rows):
             return None
         row = self._rows[index.row()]
         col = index.column()
 
         if col == 0:
-            if role == Qt.CheckStateRole:
+            if role == Qt.ItemDataRole.CheckStateRole:
                 status = str(row[2])
-                return Qt.Checked if "Verified" in status else Qt.Unchecked
-            elif role == Qt.DisplayRole:
+                return Qt.CheckState.Checked if "Verified" in status else Qt.CheckState.Unchecked
+            elif role == Qt.ItemDataRole.DisplayRole:
                 return ""
-            elif role == Qt.ToolTipRole:
+            elif role == Qt.ItemDataRole.ToolTipRole:
                 return "Click checkbox to mark field as verified / correct"
-            elif role == Qt.TextAlignmentRole:
-                return int(Qt.AlignCenter)
+            elif role == Qt.ItemDataRole.TextAlignmentRole:
+                return int(Qt.AlignmentFlag.AlignCenter)
             return None
 
         # Data columns:
         # col 1 -> field_name (row[0])
         # col 2 -> value (row[1])
         # col 3 -> status (row[2])
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             if col == 1:
                 return str(row[0])
             elif col == 2:
                 return str(row[1])
             elif col == 3:
                 return str(row[2])
-        elif role == Qt.ForegroundRole:
+        elif role == Qt.ItemDataRole.ForegroundRole:
             status = str(row[2])
             if "Verified" in status:
                 return QBrush(QColor(ACCENT_SUCCESS))
@@ -123,15 +123,15 @@ class FieldsTableModel(QAbstractTableModel):
             elif col == 2:
                 return QBrush(QColor(TEXT_SECONDARY))
             return QBrush(QColor(TEXT_MUTED))
-        elif role == Qt.TextAlignmentRole and col == 3:
-            return int(Qt.AlignCenter)
+        elif role == Qt.ItemDataRole.TextAlignmentRole and col == 3:
+            return int(Qt.AlignmentFlag.AlignCenter)
         return None
 
-    def setData(self, index, value, role=Qt.EditRole):
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
         if not index.isValid() or index.row() >= len(self._rows):
             return False
-        if index.column() == 0 and role == Qt.CheckStateRole:
-            is_checked = (value == Qt.Checked or value == Qt.Checked.value or value == 2)
+        if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
+            is_checked = (value == Qt.CheckState.Checked or value == Qt.CheckState.Checked.value or value == 2)
             row = self._rows[index.row()]
             new_status = "✅ Verified" if is_checked else "⚪ Unverified"
             self._rows[index.row()] = (row[0], row[1], new_status)
@@ -167,19 +167,19 @@ class DynamicRowsTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return len(self._headers)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             if section < len(self._headers):
                 return self._headers[section]
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._rows):
             return None
         r = index.row()
         c = index.column()
         row = self._rows[r]
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             return row[c] if c < len(row) else ""
         return None
 

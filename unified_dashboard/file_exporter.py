@@ -197,6 +197,9 @@ def _route_key(url: str) -> str:
 class FileExporter:
     """Universal File Exporter — RadDock, tabs, headings, plain tables, MyPath Documents, and MyPath generate mode."""
 
+    _csv_lock: threading.Lock | None = None
+    _run_id: str = ""
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -310,6 +313,8 @@ class FileExporter:
 
             self._on_progress({'type': 'total', 'total': len(students)})
 
+            relaunch_budget = max(5, min(25, len(students) // 10))  # automatic Chrome relaunches scaled to run size
+
             for idx, student in enumerate(students):
                 if self._abort():
                     self._log('warning', "Abort requested — halting export.")
@@ -327,22 +332,65 @@ class FileExporter:
                 t_nav = time.time()
 
                 def _do_nav():
-                    driver.get(link)
-                    wait_for_page_ready(driver, timeout=15)
+                    try:
+                        driver.set_page_load_timeout(45)
+                    except Exception:
+                        pass
+                    timed_out = False
+                    try:
+                        driver.get(link)
+                    except TimeoutException:
+                        timed_out = True
+                        self._log('warning',
+                                  f"Page load timed out (45s) for {student_id}; "
+                                  f"stopping page load and proceeding with partial page...")
+                        try:
+                            driver.execute_script("window.stop();")
+                        except Exception:
+                            pass
+                    if not timed_out:
+                        try:
+                            wait_for_page_ready(driver, timeout=10)
+                        except Exception:
+                            pass
 
                 nav_ok, _, nav_err = process_item_with_retry(
                     student_id, _do_nav, active_module_id,
                     log_func=self._log, abort_flag=self._abort, track_session=False,
                 )
                 if not nav_ok:
-                    if not self._session_alive(driver):
-                        self._log('error', f"Browser session crashed before reaching {student_id}: {nav_err}. Stopping...")
+                    is_dead = (
+                        isinstance(nav_err, BrowserSessionError)
+                        or is_dead_session_error(nav_err)
+                        or not self._session_alive(driver)
+                    )
+                    if is_dead and relaunch_budget > 0 and not self._abort():
+                        recovered = self._try_recover_session(
+                            driver, nav_err, chrome_options, download_dir_abs,
+                            login_url, config, relaunch_budget
+                        )
+                        if recovered:
+                            driver, wait, main_window, relaunch_budget = recovered
+                            self._log('warning',
+                                      f"Recovered from crash before reaching {student_id}; "
+                                      f"skipping this record and continuing.")
+                            SessionManager.update_item_status(active_module_id, student_id, success=False)
+                            self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
+                            continue
+                        else:
+                            self._log('error', "Could not recover browser session -- stopping the run.")
+                            break
+                    elif is_dead:
+                        self._log('error',
+                                  f"Browser session crashed before reaching {student_id}: {nav_err}. "
+                                  f"No relaunch budget remaining -- stopping.")
                         break
-                    self._log('error', f"Could not load {student_id}'s page after retries: {nav_err} -- skipping.")
-                    learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
-                    SessionManager.update_item_status(active_module_id, student_id, success=False)
-                    self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
-                    continue
+                    else:
+                        self._log('error', f"Could not load {student_id}'s page after retries: {nav_err} -- skipping.")
+                        learning_engine.record_latency(link, 'page_load', time.time() - t_nav)
+                        SessionManager.update_item_status(active_module_id, student_id, success=False)
+                        self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
+                        continue
 
                 if self._is_on_login_page(driver, config, settle_timeout=4.0):
                     self._log_login_page_diagnostics(driver, config, student_id, 'initial')
@@ -422,12 +470,34 @@ class FileExporter:
                                 download_dir_abs, allow_duplicates, filters, main_window, link
                             )
                         except Exception as proc_err:
-                            if not self._session_alive(driver):
+                            is_dead = (
+                                isinstance(proc_err, BrowserSessionError)
+                                or is_dead_session_error(proc_err)
+                                or not self._session_alive(driver)
+                            )
+                            if is_dead and relaunch_budget > 0 and not self._abort():
+                                recovered = self._try_recover_session(
+                                    driver, proc_err, chrome_options, download_dir_abs,
+                                    login_url, config, relaunch_budget
+                                )
+                                if recovered:
+                                    driver, wait, main_window, relaunch_budget = recovered
+                                    self._log('warning',
+                                              f"Recovered from crash during {student_id}; "
+                                              f"skipping this record and continuing.")
+                                    SessionManager.update_item_status(active_module_id, student_id, success=False)
+                                    self._on_progress({'type': 'student_done', 'students_traversed': idx+1, 'total_students': len(students)})
+                                    continue
+                                else:
+                                    self._log('error', "Could not recover browser session -- stopping the run.")
+                                    break
+                            elif is_dead:
                                 self._log('error',
                                           f"Browser session crashed while processing {student_id}: {proc_err}. "
-                                          f"Stopping the run -- please re-run to pick up where this left off.")
+                                          f"No relaunch budget remaining -- stopping.")
                                 break
-                            self._log('error', f"Unexpected error processing {student_id}: {proc_err}")
+                            else:
+                                self._log('error', f"Unexpected error processing {student_id}: {proc_err}")
 
                 learning_engine.record_student_insight(student_id, 'has_files', files_got > 0)
                 if files_got == 0:
@@ -1017,9 +1087,10 @@ class FileExporter:
             wait_for_page_ready(new_driver, timeout=15)
         return new_driver, new_wait, new_main_window
 
-    def _try_recover_session(self, err, chrome_options, download_dir_abs: str, login_url: str,
-                              config: dict, relaunch_budget: int):
-        """On a dead browser session, attempt one relaunch if budget remains.
+    def _try_recover_session(self, old_driver, err, chrome_options, download_dir_abs: str,
+                              login_url: str, config: dict, relaunch_budget: int):
+        """On a dead browser session, quit the old driver, then attempt one
+        relaunch if budget remains.
         Returns (driver, wait, main_window, new_budget) on success, or None
         if recovery isn't possible / budget exhausted (caller should stop the
         run)."""
@@ -1027,10 +1098,14 @@ class FileExporter:
             self._log('error', f"Browser session crashed: {err}. No relaunches left this run -- stopping.")
             return None
         try:
+            safe_quit_driver(old_driver)
+        except Exception:
+            pass
+        try:
             driver, wait, main_window = self._relaunch_driver(
                 chrome_options, download_dir_abs, login_url, config)
-            self._log('error',
-                      f"Browser session crashed: {err}. Recovered by relaunching Chrome -- "
+            self._log('warning',
+                      f"Browser session crashed ({err}). Recovered by relaunching Chrome -- "
                       f"skipping the record in progress and continuing with the next one "
                       f"({relaunch_budget - 1} relaunch(es) left this run).")
             return driver, wait, main_window, relaunch_budget - 1

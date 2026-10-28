@@ -59,6 +59,7 @@ class FileUploaderUI(BaseToolFrame):
         # The automation can still auto-enable this at run time if a site has proven
         # (from past runs) that it needs DevTools even with this box unchecked.
         self.devtools_var = tk.BooleanVar(value=settings.get("auto_open_devtools", False))
+        self.workers_var = tk.IntVar(value=1)
 
         self.uploader = FileUploader()
         self._populate_inputs()
@@ -115,6 +116,15 @@ class FileUploaderUI(BaseToolFrame):
                  "system will auto-enable it for that site and note it in the log.",
             font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD, anchor="w", justify="left"
         ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
+        workers_frame = tk.Frame(self.inputs_container, bg=BG_CARD)
+        workers_frame.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        tk.Label(workers_frame, text="Parallel Chrome Workers:", font=FONT_BODY_BOLD, fg=TEXT_PRIMARY, bg=BG_CARD).pack(side="left", padx=(0, 10))
+        tk.Spinbox(workers_frame, from_=1, to=50, width=6, textvariable=self.workers_var,
+                   bg="#2b2b2b", fg="#ffffff", buttonbackground="#3c3c3c", bd=1, relief="solid").pack(side="left")
+        tk.Label(workers_frame, text="(1 = sequential, 2–50 = parallel Chrome instances)",
+                 font=FONT_SMALL, fg=TEXT_MUTED, bg=BG_CARD).pack(side="left", padx=(10, 0))
 
     def _apply_remembered_labels(self):
         """Reflect any remembered Credentials/CSV/Source Dir paths (loaded in
@@ -199,7 +209,7 @@ class FileUploaderUI(BaseToolFrame):
         settings.set("file_uploader_last_source_dir", p)
         settings.save()
 
-    def get_task_from_inputs(self, silent: bool = False) -> QueueTask:
+    def get_task_from_inputs(self, silent: bool = False) -> QueueTask | None:
         if not self.cred_path or not self.links_path or not self.source_dir:
             if not silent:
                 messagebox.showerror("Missing Fields", "Please select Credentials, Links CSV, and Source Directory.")
@@ -218,9 +228,11 @@ class FileUploaderUI(BaseToolFrame):
             return None
 
         target_folder = self.target_folder_var.get()
+        n_workers = max(1, self.workers_var.get())
+        workers_tag = f" | {n_workers} workers" if n_workers > 1 else ""
         label = (
             f"Creds: {os.path.basename(self.cred_path)} | "
-            f"CSV: {os.path.basename(self.links_path)} ({len(students)} recs) | "
+            f"CSV: {os.path.basename(self.links_path)} ({len(students)} recs){workers_tag} | "
             f"Source: {os.path.basename(self.source_dir)} | "
             f"Folder: {target_folder}"
         )
@@ -233,6 +245,7 @@ class FileUploaderUI(BaseToolFrame):
             "devtools": self.devtools_var.get(),
             "cred_path": self.cred_path,
             "links_path": self.links_path,
+            "n_workers": n_workers,
         }
 
         import uuid
@@ -241,10 +254,11 @@ class FileUploaderUI(BaseToolFrame):
     def run_single_task(self, task: QueueTask) -> bool:
         inputs = task.inputs
         self._log_dir = inputs["source_dir"]
-        self.log("info", f"Running File Uploader task: {task.label}")
+        n_workers = max(1, inputs.get("n_workers", 1))
+        self.log("info", f"Running File Uploader task ({'parallel ×' + str(n_workers) if n_workers > 1 else 'sequential'}): {task.label}")
 
         try:
-            self.uploader.run(
+            common_kwargs = dict(
                 config=inputs["config"],
                 students=inputs["students"],
                 source_dir=inputs["source_dir"],
@@ -254,6 +268,10 @@ class FileUploaderUI(BaseToolFrame):
                 abort_flag=lambda: self.abort_requested,
                 log=self.log
             )
+            if n_workers > 1:
+                self.uploader.run_parallel(n_workers=n_workers, **common_kwargs)
+            else:
+                self.uploader.run(**common_kwargs)
             return not self.abort_requested
         except Exception as e:
             import traceback

@@ -8,8 +8,8 @@ Supports:
 """
 
 import os
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
+from PySide6.QtCore import Qt  # type: ignore
+from PySide6.QtWidgets import (  # type: ignore
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QCheckBox, QRadioButton, QButtonGroup, QGroupBox, QFrame, QMessageBox,
     QSpinBox
@@ -71,7 +71,7 @@ class GradeView(BaseToolWidget):
         b_layout.setContentsMargins(10, 6, 10, 6)
         self.lbl_banner_title = QLabel("📝 Mode: Submit Final Grades")
         self.lbl_banner_title.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ACCENT_INFO}; border: none;")
-        self.lbl_banner_desc = QLabel("Reads student ID, score/grade, and completion date to submit official final grades.")
+        self.lbl_banner_desc = QLabel("Opens Edit Status modal per student. Fills grade/date/score when provided; submits modal-only when not.")
         self.lbl_banner_desc.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY}; border: none;")
         b_layout.addWidget(self.lbl_banner_title)
         b_layout.addWidget(self.lbl_banner_desc)
@@ -82,7 +82,7 @@ class GradeView(BaseToolWidget):
                 self.sub_feature = "submit"
                 self.lbl_banner_title.setText("📝 Mode: Submit Final Grades")
                 self.lbl_banner_title.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {ACCENT_INFO}; border: none;")
-                self.lbl_banner_desc.setText("Reads student ID, score/grade, and completion date to submit official final grades.")
+                self.lbl_banner_desc.setText("Opens Edit Status modal per student. Fills grade/date/score when provided; submits modal-only when not.")
             else:
                 self.sub_feature = "unsubmit"
                 self.lbl_banner_title.setText("↩️ Mode: Un-submit Grades (Revert)")
@@ -115,7 +115,7 @@ class GradeView(BaseToolWidget):
         o_layout.setContentsMargins(10, 10, 10, 10)
 
         self.chk_devtools = QCheckBox("Auto-open Chrome DevTools")
-        self.chk_devtools.setChecked(settings.get("auto_open_devtools", False))
+        self.chk_devtools.setChecked(bool(settings.get("auto_open_devtools", False)))
         o_layout.addWidget(self.chk_devtools)
 
         # ── Parallel workers row ──────────────────────────────────────
@@ -212,18 +212,29 @@ class GradeView(BaseToolWidget):
                 prog_cb(completed, total)
             kpi_cb(data)
 
-        common_kwargs = dict(
-            config=config,
-            csv_path=inputs["csv_path"],
-            devtools=inputs.get("auto_devtools", False),
-            on_progress=on_progress,
-            abort_flag=is_aborted,
-            log=lambda lvl, msg: log_cb(msg, lvl.upper()),
-            mode=mode,
-            skip_completed=inputs.get("skip_completed", True),
-        )
+        def _log_adapter(lvl: str, msg: str):
+            log_cb(msg, str(lvl).upper())
 
         if n_workers > 1:
-            self.submitter.run_parallel(n_workers=n_workers, **common_kwargs)
+            self.submitter.run_parallel(
+                config=config,
+                csv_path=inputs["csv_path"],
+                n_workers=n_workers,
+                devtools=inputs.get("auto_devtools", False),
+                on_progress=on_progress,
+                abort_flag=is_aborted,
+                log=_log_adapter,
+                mode=mode,
+                skip_completed=inputs.get("skip_completed", True),
+            )
         else:
-            self.submitter.run(**common_kwargs)
+            self.submitter.run(
+                config=config,
+                csv_path=inputs["csv_path"],
+                devtools=inputs.get("auto_devtools", False),
+                on_progress=on_progress,
+                abort_flag=is_aborted,
+                log=_log_adapter,
+                mode=mode,
+                skip_completed=inputs.get("skip_completed", True),
+            )

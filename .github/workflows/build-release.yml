@@ -1,1 +1,106 @@
-bmFtZTogQnVpbGQgU3RhbmRhbG9uZSBXaW5kb3dzIEV4ZWN1dGFibGUKCm9uOgogIHB1c2g6CiAgICBicmFuY2hlczoKICAgICAgLSBtYWluCiAgICB0YWdzOgogICAgICAtICd2KicKICB3b3JrZmxvd19kaXNwYXRjaDoKICAgIGlucHV0czoKICAgICAgdmVyc2lvbjoKICAgICAgICBkZXNjcmlwdGlvbjogJ1JlbGVhc2UgdmVyc2lvbiAoZS5nLiB2MS4wLjUpJwogICAgICAgIHJlcXVpcmVkOiBmYWxzZQogICAgICAgIGRlZmF1bHQ6ICcnCgpwZXJtaXNzaW9uczoKICBjb250ZW50czogd3JpdGUKCmpvYnM6CiAgYnVpbGQ6CiAgICBuYW1lOiBCdWlsZCBQeVNpZGU2IFdpbmRvd3MgRVhFCiAgICBydW5zLW9uOiB3aW5kb3dzLWxhdGVzdAoKICAgIHN0ZXBzOgogICAgICAtIG5hbWU6IENoZWNrb3V0IENvZGUKICAgICAgICB1c2VzOiBhY3Rpb25zL2NoZWNrb3V0QHY0CiAgICAgICAgd2l0aDoKICAgICAgICAgIGZldGNoLWRlcHRoOiAwCgogICAgICAtIG5hbWU6IERldGVybWluZSBWZXJzaW9uCiAgICAgICAgaWQ6IHZlcnNpb24KICAgICAgICBzaGVsbDogYmFzaAogICAgICAgIHJ1bjogfAogICAgICAgICAgaWYgWyAiJHt7IGdpdGh1Yi5ldmVudF9uYW1lIH19IiA9PSAid29ya2Zsb3dfZGlzcGF0Y2giIF0gJiYgWyAtbiAiJHt7IGdpdGh1Yi5ldmVudC5pbnB1dHMudmVyc2lvbiB9fSIgXTsgdGhlbgogICAgICAgICAgICBWRVJTSU9OPSIke3sgZ2l0aHViLmV2ZW50LmlucHV0cy52ZXJzaW9uIH19IgogICAgICAgICAgZWxpZiBbWyAiJHt7IGdpdGh1Yi5yZWYgfX0iID09IHJlZnMvdGFncy92KiBdXTsgdGhlbgogICAgICAgICAgICBWRVJTSU9OPSIke3sgZ2l0aHViLnJlZl9uYW1lIH19IgogICAgICAgICAgZWxzZQogICAgICAgICAgICAjIEF1dG8taW5jcmVtZW50IHBhdGNoIHZlcnNpb24gZnJvbSBsYXRlc3QgdGFnCiAgICAgICAgICAgIExBVEVTVD0kKGdpdCB0YWcgLS1zb3J0PS12ZXJzaW9uOnJlZm5hbWUgfCBncmVwIC1FICd2WzAtOV0rXC5bMC05XStcLlswLTldKycgfCBoZWFkIC0xKQogICAgICAgICAgICBpZiBbIC16ICIkTEFURVNUIiBdOyB0aGVuCiAgICAgICAgICAgICAgVkVSU0lPTj0idjEuMC41IgogICAgICAgICAgICBlbHNlCiAgICAgICAgICAgICAgIyBJbmNyZW1lbnQgcGF0Y2ggbnVtYmVyCiAgICAgICAgICAgICAgTUFKT1I9JChlY2hvICRMQVRFU1QgfCBjdXQgLWQuIC1mMSB8IHRyIC1kICd2JykKICAgICAgICAgICAgICBNSU5PUj0kKGVjaG8gJExBVEVTVCB8IGN1dCAtZC4gLWYyKQogICAgICAgICAgICAgIFBBVENIPSQoZWNobyAkTEFURVNUIHwgY3V0IC1kLiAtZjMpCiAgICAgICAgICAgICAgUEFUQ0g9JCgoUEFUQ0ggKyAxKSkKICAgICAgICAgICAgICBWRVJTSU9OPSJ2JHtNQUpPUn0uJHtNSU5PUn0uJHtQQVRDSH0iCiAgICAgICAgICAgIGZpCiAgICAgICAgICBmaQogICAgICAgICAgZWNobyAidmVyc2lvbj0kVkVSU0lPTiIgPj4gJEdJVEhVQl9PVVRQVVQKICAgICAgICAgIGVjaG8gIkJ1aWxkaW5nIHJlbGVhc2U6ICRWRVJTSU9OIgoKICAgICAgLSBuYW1lOiBTZXQgdXAgUHl0aG9uCiAgICAgICAgdXNlczogYWN0aW9ucy9zZXR1cC1weXRob25AdjUKICAgICAgICB3aXRoOgogICAgICAgICAgcHl0aG9uLXZlcnNpb246ICczLjExJwogICAgICAgICAgY2FjaGU6ICdwaXAnCiAgICAgICAgICBjYWNoZS1kZXBlbmRlbmN5LXBhdGg6ICd1bmlmaWVkX2Rhc2hib2FyZC9yZXF1aXJlbWVudHMudHh0JwoKICAgICAgLSBuYW1lOiBJbnN0YWxsIERlcGVuZGVuY2llcwogICAgICAgIHJ1bjogfAogICAgICAgICAgcHl0aG9uIC1tIHBpcCBpbnN0YWxsIC0tdXBncmFkZSBwaXAKICAgICAgICAgIHB5dGhvbiAtbSBwaXAgaW5zdGFsbCBweWluc3RhbGxlciBweWluc3RhbGxlci1ob29rcy1jb250cmliCiAgICAgICAgICBweXRob24gLW0gcGlwIGluc3RhbGwgLXIgdW5pZmllZF9kYXNoYm9hcmQvcmVxdWlyZW1lbnRzLnR4dAoKICAgICAgLSBuYW1lOiBCdWlsZCBFeGVjdXRhYmxlIHdpdGggUHlJbnN0YWxsZXIKICAgICAgICB3b3JraW5nLWRpcmVjdG9yeTogdW5pZmllZF9kYXNoYm9hcmQKICAgICAgICBydW46IHwKICAgICAgICAgIHB5dGhvbiAtbSBQeUluc3RhbGxlciBidWlsZC5zcGVjIC0tY2xlYW4gLS1ub2NvbmZpcm0KCiAgICAgIC0gbmFtZTogVmVyaWZ5IEV4ZWN1dGFibGUgRXhpc3RzCiAgICAgICAgcnVuOiB8CiAgICAgICAgICBpZiAoVGVzdC1QYXRoICJ1bmlmaWVkX2Rhc2hib2FyZC9kaXN0L1VuaWZpZWREYXNoYm9hcmQuZXhlIikgewogICAgICAgICAgICAkc2l6ZSA9IChHZXQtSXRlbSAidW5pZmllZF9kYXNoYm9hcmQvZGlzdC9VbmlmaWVkRGFzaGJvYXJkLmV4ZSIpLkxlbmd0aCAvIDFNQgogICAgICAgICAgICBXcml0ZS1Ib3N0ICJTdWNjZXNzOiBVbmlmaWVkRGFzaGJvYXJkLmV4ZSBidWlsdCAoJChbbWF0aF06OlJvdW5kKCRzaXplLCAyKSkgTUIpIgogICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgV3JpdGUtRXJyb3IgIlVuaWZpZWREYXNoYm9hcmQuZXhlIG5vdCBmb3VuZCBpbiBkaXN0LyIKICAgICAgICAgICAgZXhpdCAxCiAgICAgICAgICB9CgogICAgICAtIG5hbWU6IFVwbG9hZCBBcnRpZmFjdAogICAgICAgIHVzZXM6IGFjdGlvbnMvdXBsb2FkLWFydGlmYWN0QHY0CiAgICAgICAgd2l0aDoKICAgICAgICAgIG5hbWU6IFVuaWZpZWREYXNoYm9hcmQtV2luZG93cy1FWEUKICAgICAgICAgIHBhdGg6IHVuaWZpZWRfZGFzaGJvYXJkL2Rpc3QvVW5pZmllZERhc2hib2FyZC5leGUKCiAgICAgIC0gbmFtZTogUHVibGlzaCBHaXRIdWIgUmVsZWFzZQogICAgICAgIHVzZXM6IHNvZnRwcm9wcy9hY3Rpb24tZ2gtcmVsZWFzZUB2MgogICAgICAgIHdpdGg6CiAgICAgICAgICB0YWdfbmFtZTogJHt7IHN0ZXBzLnZlcnNpb24ub3V0cHV0cy52ZXJzaW9uIH19CiAgICAgICAgICBuYW1lOiAiVW5pZmllZCBTeXN0ZW0gQXV0b21hdGlvbiBTdWl0ZSAke3sgc3RlcHMudmVyc2lvbi5vdXRwdXRzLnZlcnNpb24gfX0gKFJlYWR5LXRvLUV4ZWN1dGUpIgogICAgICAgICAgZHJhZnQ6IGZhbHNlCiAgICAgICAgICBwcmVyZWxlYXNlOiBmYWxzZQogICAgICAgICAgZmlsZXM6IHVuaWZpZWRfZGFzaGJvYXJkL2Rpc3QvVW5pZmllZERhc2hib2FyZC5leGUKICAgICAgICAgIGJvZHk6IHwKICAgICAgICAgICAgIyMgðŸš€gVW5pZmllZCBTeXN0ZW0gQXV0b21hdGlvbiBTdWl0ZSAke3sgc3RlcHMudmVyc2lvbi5vdXRwdXRzLnZlcnNpb24gfX0KCiAgICAgICAgICAgIFRoaXMgcmVsZWFzZSBwcm92aWRlcyBhIHNpbmdsZSwgcG9ydGFibGUsIHJlYWR5LXRvLXJ1biBgLmV4ZWAgZm9yIFdpbmRvd3MuCgogICAgICAgICAgICAjIyMgSW5zdHJ1Y3Rpb25zIGZvciBVc2VyczoKICAgICAgICAgICAgMS4gRG93bmxvYWQgKipgVW5pZmllZERhc2hib2FyZC5leGVgKiogZnJvbSB0aGUgQXNzZXRzIGxpc3QgYmVsb3cuCiAgICAgICAgICAgIDIuIERvdWJsZS1jbGljayAqKmBVbmlmaWVkRGFzaGJvYXJkLmV4ZWAqKiB0byBsYXVuY2ggdGhlIGRhc2hib2FyZC4KICAgICAgICAgICAgMy4gKipObyBQeXRob24gb3IgY29tbWFuZC1saW5lIGluc3RhbGxhdGlvbiByZXF1aXJlZC4qKgogICAgICAgICAgICA0LiAqTm90ZTogR29vZ2xlIENocm9tZSBtdXN0IGJlIGluc3RhbGxlZCBvbiB5b3VyIGNvbXB1dGVyIGZvciBhdXRvbWF0aW9uIHRhc2tzLioK
+name: Build Standalone Windows Executable
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v1.0.5)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build PySide6 Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            # Auto-increment patch version from latest tag
+            LATEST=$(git tag --sort=-version:refname | grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ -z "$LATEST" ]; then
+              VERSION="v1.0.5"
+            else
+              # Increment patch number
+              MAJOR=$(echo $LATEST | cut -d. -f1 | tr -d 'v')
+              MINOR=$(echo $LATEST | cut -d. -f2)
+              PATCH=$(echo $LATEST | cut -d. -f3)
+              PATCH=$((PATCH + 1))
+              VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+            fi
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building release: $VERSION"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'unified_dashboard/requirements.txt'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pyinstaller-hooks-contrib
+          python -m pip install -r unified_dashboard/requirements.txt
+
+      - name: Build Executable with PyInstaller
+        working-directory: unified_dashboard
+        run: |
+          python -m PyInstaller build.spec --clean --noconfirm
+
+      - name: Verify Executable Exists
+        run: |
+          if (Test-Path "unified_dashboard/dist/UnifiedDashboard.exe") {
+            $size = (Get-Item "unified_dashboard/dist/UnifiedDashboard.exe").Length / 1MB
+            Write-Host "Success: UnifiedDashboard.exe built ($([math]::Round($size, 2)) MB)"
+          } else {
+            Write-Error "UnifiedDashboard.exe not found in dist/"
+            exit 1
+          }
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnifiedDashboard-Windows-EXE
+          path: unified_dashboard/dist/UnifiedDashboard.exe
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "Unified System Automation Suite ${{ steps.version.outputs.version }} (Ready-to-Execute)"
+          draft: false
+          prerelease: false
+          files: unified_dashboard/dist/UnifiedDashboard.exe
+          body: |
+            ## 🚀 Unified System Automation Suite ${{ steps.version.outputs.version }}
+
+            This release provides a single, portable, ready-to-run `.exe` for Windows.
+
+            ### Instructions for Users:
+            1. Download **`UnifiedDashboard.exe`** from the Assets list below.
+            2. Double-click **`UnifiedDashboard.exe`** to launch the dashboard.
+            3. **No Python or command-line installation required.**
+            4. *Note: Google Chrome must be installed on your computer for automation tasks.*

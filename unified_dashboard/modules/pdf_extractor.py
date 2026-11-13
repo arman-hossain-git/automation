@@ -88,6 +88,23 @@ DEFAULT_CONFIG = {
 # transcript layout) seeded into CONFIGS_DIR the first time it's created, so
 # there's a working real-world example to load/inspect/clone.
 _BUILTIN_PRESETS = {
+    "Attendance Roster": {
+        "report_type": "attendance_roster",
+        "document_title": "Attendance Roster",
+        "record_separator": "Bayamon Community College",
+        "output_columns": [
+            "Instructor",
+            "Room",
+            "Class Start",
+            "Course Code",
+            "Course",
+            "Term Start",
+            "Id",
+            "Name",
+            "Date",
+            "Attended Hours"
+        ]
+    },
     "Student Transcript": {
         "report_type": "student_transcript",
         "record_separator": "Bayamon Community College",
@@ -387,6 +404,8 @@ class ConfigurableExtractor:
     # ── PDF Reading & Record Splitting ──
 
     def read_pdf(self, pdf_path, max_pages: int | None = None):
+        self._current_pdf_path = pdf_path
+        self._cached_page_words = {}
         page_texts = []
         page_offsets = []
         current_offset = 0
@@ -395,6 +414,8 @@ class ConfigurableExtractor:
             pages = pdf.pages[:max_pages] if (max_pages and max_pages > 0) else pdf.pages
             for page_num, page in enumerate(pages, 1):
                 text = page.extract_text() or ''
+                words = page.extract_words()
+                self._cached_page_words[page_num] = words
                 page_offsets.append((current_offset, page_num))
                 page_texts.append(text)
                 current_offset += len(text) + 1
@@ -422,6 +443,10 @@ class ConfigurableExtractor:
         ):
             ste = StudentTranscriptExtractor(self.config)
             return ste.split_records(full_text, page_offsets)
+
+        if self.config.get("report_type") in ("attendance_roster", "attendance"):
+            are = AttendanceRosterExtractor(self.config)
+            return are.split_records(full_text, page_offsets)
 
         separator = (self.config.get("record_separator") or "").strip()
         if not separator:
@@ -608,13 +633,19 @@ class ConfigurableExtractor:
             parts = [results.get(src, 'N/A') for src in cf.get("join", [])]
             sep = cf.get("sep", " ")
             non_na = [p for p in parts if p and p != 'N/A']
-            results[cf["name"]] = sep.join(non_na) if non_na else 'N/A'
+            unique_parts = []
+            for p in non_na:
+                if not unique_parts:
+                    unique_parts.append(p)
+                elif p not in " ".join(unique_parts):
+                    unique_parts.append(p)
+            results[cf["name"]] = sep.join(unique_parts) if unique_parts else 'N/A'
         return results
 
     def _extract_student_ledger_data_rows(self, block):
         lines = block.split('\n')
         ENTRY_START = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+([A-Z][A-Z0-9\-]*)\s+')
-        AMOUNT_END = re.compile(r'(-?\$[\d,]+)\s*$')
+        AMOUNT_END = re.compile(r'(-?\$[\d,]+(?:\.\d{2})?)\s*$')
         PROG_RE = re.compile(r'(Certified\s+\S+\s+Welding)')
         PP_RE = re.compile(r'^(\d+\s*-\s*\d+\s+hours)\s*')
         HEADER_FOOTER_RES = [re.compile(p, re.IGNORECASE) for p in [
@@ -1039,6 +1070,19 @@ class ConfigurableExtractor:
             ) if rows}
             return name, address, rep_sections, summary, rows
 
+        if self.config.get("report_type") in ("attendance_roster", "attendance"):
+            are = AttendanceRosterExtractor(self.config)
+            are._current_pdf_path = getattr(self, "_current_pdf_path", None)
+            are._cached_page_words = getattr(self, "_cached_page_words", {})
+            rows = are.extract_record(block)
+            name = rows[0].get("Name", rows[0].get("Student Name", "N/A")) if rows else "N/A"
+            address = "N/A"
+            rep_sections = {}
+            summary = {k: rows[0].get(k, "") for k in (
+                "Instructor", "Room", "Class Start", "Course Code", "Course", "Course Name", "Term Start"
+            ) if rows}
+            return name, address, rep_sections, summary, rows
+
         name, name_idx = self.extract_name(block)
         address = self.extract_address(block, name_idx)
         rep_sections = self.extract_repeating_sections(block)
@@ -1075,6 +1119,27 @@ class ConfigurableExtractor:
                 "data_rows_sample": rows[:3],
             }
 
+        if self.config.get("report_type") in ("attendance_roster", "attendance"):
+            are = AttendanceRosterExtractor(self.config)
+            are._current_pdf_path = getattr(self, "_current_pdf_path", None)
+            are._cached_page_words = getattr(self, "_cached_page_words", {})
+            rows = are.extract_record(block)
+            name = rows[0].get("Name", rows[0].get("Student Name", "N/A")) if rows else "N/A"
+            address = "N/A"
+            rep_sections = {}
+            summary = {k: rows[0].get(k, "") for k in (
+                "Instructor", "Room", "Class Start", "Course Code", "Course", "Course Name", "Term Start"
+            ) if rows}
+            return {
+                "name": name,
+                "name_line_index": 0,
+                "address": address,
+                "repeating_sections": rep_sections,
+                "summary_fields": summary,
+                "data_rows_count": len(rows),
+                "data_rows_sample": rows[:3],
+            }
+
         if (
             self.config.get("report_type") in ("student_transcript", "transcript", "bayamon_transcript", "official_transcript")
             or "program_match" in self.config
@@ -1088,6 +1153,27 @@ class ConfigurableExtractor:
                 "id", "dob", "phone", "program", "program_description", "drop_date",
                 "group", "first_term", "exp_grad_date", "ft_pt", "status",
                 "lda", "grad_date", "session"
+            ) if rows}
+            return {
+                "name": name,
+                "name_line_index": 0,
+                "address": address,
+                "repeating_sections": rep_sections,
+                "summary_fields": summary,
+                "data_rows_count": len(rows),
+                "data_rows_sample": rows[:3],
+            }
+
+        if self.config.get("report_type") in ("attendance_roster", "attendance"):
+            are = AttendanceRosterExtractor(self.config)
+            are._current_pdf_path = getattr(self, "_current_pdf_path", None)
+            are._cached_page_words = getattr(self, "_cached_page_words", {})
+            rows = are.extract_record(block)
+            name = rows[0].get("Name", rows[0].get("Student Name", "N/A")) if rows else "N/A"
+            address = "N/A"
+            rep_sections = {}
+            summary = {k: rows[0].get(k, "") for k in (
+                "Instructor", "Room", "Class Start", "Course Code", "Course", "Course Name", "Term Start"
             ) if rows}
             return {
                 "name": name,
@@ -1496,8 +1582,14 @@ class StudentScheduleExtractor:
             sep = cf.get("sep", " ")
             if cf_name and join_keys:
                 vals = [student_ctx.get(k, "") for k in join_keys if student_ctx.get(k)]
-                if vals:
-                    student_ctx[cf_name] = sep.join(vals).strip()
+                unique_vals = []
+                for v in vals:
+                    if not unique_vals:
+                        unique_vals.append(v)
+                    elif v not in " ".join(unique_vals):
+                        unique_vals.append(v)
+                if unique_vals:
+                    student_ctx[cf_name] = sep.join(unique_vals).strip()
 
         # ── 5. Course rows with term context ──────────────────────────────
         output_rows = []
@@ -1758,6 +1850,12 @@ class StudentScheduleExtractor:
             "output": output_xlsx,
         }
         _log("info", f"Extraction complete: {result}")
+        for h in list(file_logger.handlers):
+            try:
+                h.close()
+                file_logger.removeHandler(h)
+            except Exception:
+                pass
         return result
 
 
@@ -2392,6 +2490,677 @@ class StudentTranscriptExtractor:
             "output": output_xlsx,
         }
         _log("info", f"Extraction complete: {result}")
+        for h in list(file_logger.handlers):
+            try:
+                h.close()
+                file_logger.removeHandler(h)
+            except Exception:
+                pass
+        return result
+
+
+
+# ---------------------------------------------------------------------------
+# Attendance Roster extractor  (report_type in ("attendance_roster", "attendance"))
+# ---------------------------------------------------------------------------
+
+class AttendanceRosterExtractor:
+    """Dedicated extractor for Bayamon Community College Attendance Roster PDFs.
+
+    Handles:
+    - Instructor, Room, Class Start, Course Code, Course Name, Term Start.
+    - Multi-line Course Names.
+    - 7-day date ranges (Sunday to Saturday) with date expansion.
+    - Exact horizontal column coordinate alignment for attendance hours.
+    - Student ID (e.g. BCC...) and multi-line wrapped student names.
+    - Output unpivoting: produces one row per student per day in date order.
+    """
+
+    _INST_RE = re.compile(r'Instructor:\s*(.*?)\s+Room:\s*(.*?)\s+Class Start:\s*(\d{2}/\d{2}/\d{4})', re.IGNORECASE)
+    _COURSE_RE = re.compile(r'Course:\s*([A-Za-z0-9\-]+)\s+([A-Za-z]{3}\s+\d{1,2}\s*-\s*[A-Za-z]{3}\s+\d{1,2})', re.IGNORECASE)
+    _TERM_RE = re.compile(r'Term Start:\s*(\d{2}/\d{2}/\d{4})', re.IGNORECASE)
+
+    def __init__(self, config: dict | None = None):
+        self.config = config or {}
+        self.output_columns = self.config.get("output_columns", [
+            "Instructor", "Room", "Class Start", "Course Code", "Course",
+            "Term Start", "Id", "Name", "Date", "Attended Hours"
+        ])
+        self._current_pdf_path = None
+        self._cached_page_words: dict[int, list[dict]] = {}
+        self._cached_page_rects: dict[int, list[dict]] = {}
+
+    def read_pdf(self, pdf_path: str, max_pages: int | None = None):
+        """Return (full_text, page_offsets) and cache words & rects for coordinate matching."""
+        self._current_pdf_path = pdf_path
+        self._cached_page_words.clear()
+        self._cached_page_rects.clear()
+        page_texts = []
+        page_offsets = []
+        current_offset = 0
+
+        with pdfplumber.open(pdf_path) as pdf:
+            pages = pdf.pages[:max_pages] if (max_pages and max_pages > 0) else pdf.pages
+            for page_num, page in enumerate(pages, 1):
+                text = page.extract_text() or ""
+                words = page.extract_words()
+                rects = page.rects or []
+                self._cached_page_words[page_num] = words
+                self._cached_page_rects[page_num] = rects
+                page_offsets.append((current_offset, page_num))
+                page_texts.append(text)
+                current_offset += len(text) + 1
+
+        return "\n".join(page_texts), page_offsets
+
+    def split_records(self, full_text: str, page_offsets):
+        """Split into (block_text, page_number) tuples using record_separator or page offsets."""
+        separator = (self.config.get("record_separator") or "Bayamon Community College").strip()
+        if not separator:
+            text = full_text.strip()
+            return [(text, page_offsets[0][1] if page_offsets else 1)] if text else []
+
+        results = []
+        positions = []
+        search_start = 0
+        while True:
+            idx = full_text.find(separator, search_start)
+            if idx == -1:
+                break
+            positions.append(idx)
+            search_start = idx + len(separator)
+
+        for k, pos in enumerate(positions):
+            block_start = pos
+            block_end = positions[k + 1] if k + 1 < len(positions) else len(full_text)
+            block_text = full_text[block_start:block_end].strip()
+            if not block_text:
+                continue
+
+            page_num = 1
+            for offset, pnum in page_offsets:
+                if pos >= offset:
+                    page_num = pnum
+                else:
+                    break
+
+            results.append((block_text, page_num))
+
+        return results
+
+    # ------------------------------------------------------------------ #
+    #  Month-name → number map (used in multi-week date parsing)         #
+    # ------------------------------------------------------------------ #
+    _MONTH_MAP = {m: i for i, m in enumerate(
+        ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'], 1
+    )}
+    _DATE_RANGE_RE = re.compile(
+        r'([A-Za-z]{3})\s+(\d{1,2})\s*-\s*([A-Za-z]{3})\s+(\d{1,2})'
+    )
+    _STUDENT_ID_RE = re.compile(r'^([A-Z]{2,4}\d{4,6})$')
+    # Footer / page-stamp patterns to exclude from body words
+    _FOOTER_WORDS = frozenset({
+        'Monday,', 'Tuesday,', 'Wednesday,', 'Thursday,', 'Friday,',
+        'Saturday,', 'Sunday,', 'January,', 'February,', 'March,',
+        'April,', 'May,', 'June,', 'July,', 'August,', 'September,',
+        'October,', 'November,', 'December,', 'AM', 'PM', 'Page', 'of',
+    })
+
+    def _week_start_date(self, month_str: str, day_str: str, ref_year: int) -> datetime.datetime:
+        """Return datetime for the given month/day/year, handling cross-year wrap."""
+        month = self._MONTH_MAP.get(month_str[:3].capitalize(), 1)
+        day   = int(day_str)
+        return datetime.datetime(ref_year, month, day)
+
+    def _group_words_into_rows(self, word_list: list[dict], y_tol: float = 3.5) -> dict:
+        """Group a flat word list into {top_key: [words]} visual rows."""
+        rows: dict = {}
+        for w in word_list:
+            top_key = round(w['top'], 1)
+            matched = None
+            for k in rows:
+                if abs(k - top_key) < y_tol:
+                    matched = k
+                    break
+            if matched is None:
+                matched = top_key
+                rows[matched] = []
+            rows[matched].append(w)
+        return rows
+
+    @staticmethod
+    def _is_red(color) -> bool:
+        """Return True if the color represents a red stroke or fill."""
+        if not color:
+            return False
+        if isinstance(color, (list, tuple)):
+            if len(color) == 3:
+                r, g, b = color
+                return r > 0.8 and g < 0.2 and b < 0.2
+            elif len(color) == 4:
+                c, m, y, k = color
+                return c < 0.2 and m > 0.8 and y > 0.8 and k < 0.2
+        return False
+
+    def extract_page_data(self, text: str, words: list[dict] | None = None,
+                          rects: list[dict] | None = None,
+                          source_file: str = "N/A", page_number: int = 1,
+                          page_height: float = 841.89) -> list[dict]:
+        """Extract attendance rows from one PDF page.
+
+        Handles:
+        - Single-week and multi-week pages (all day columns extracted per date).
+        - Multiple consecutive Course/TermStart blocks stacked vertically on a page.
+        - Preserves clean student names without leaking attendance tokens.
+        - Maps 'I' attendance markers to 'I' in Attended Hours.
+        - Identifies 0.00 attended hours enclosed by red boundaries as 'Absent'.
+        - Emits one row per student per day in date order.
+        """
+        words = words or []
+        rects = rects or []
+
+        # ── 1. Parse Instructor / Room / Class Start (once per page) ──────
+        m_inst = self._INST_RE.search(text)
+        if not m_inst:
+            return []
+
+        instructor     = m_inst.group(1).strip()
+        room           = m_inst.group(2).strip()
+        class_start_str= m_inst.group(3).strip()
+        class_start_dt = datetime.datetime.strptime(class_start_str, "%m/%d/%Y")
+
+        m_term = self._TERM_RE.search(text)
+        term_start_dt = (datetime.datetime.strptime(m_term.group(1), "%m/%d/%Y")
+                         if m_term else class_start_dt)
+
+        course_word_tops = sorted(
+            {round(w['top'], 1) for w in words if w['text'] == 'Course:'}
+        )
+        term_word_tops = sorted(
+            {round(w['top'], 1) for w in words if w['text'] == 'Term'}
+        )
+
+        footer_y = page_height - 55
+        red_rects = [
+            r for r in rects
+            if self._is_red(r.get('stroking_color')) or self._is_red(r.get('non_stroking_color'))
+        ]
+
+        if not course_word_tops:
+            return []
+
+        out_cols = [c.strip() for c in (self.output_columns or [])]
+        has_course_code_col = any(
+            c.lower() in ("course code", "course_code") for c in out_cols
+        )
+        has_course_name_col = any(
+            c.lower() in ("course name", "course_name") for c in out_cols
+        )
+
+        all_rows: list[dict] = []
+
+        # ── 3. Process each block ──────────────────────────────────────────
+        for block_idx, course_top in enumerate(course_word_tops):
+
+            term_top = next((t for t in term_word_tops if t > course_top - 5), None)
+            if term_top is None:
+                continue
+
+            # Course code
+            course_line_words = sorted(
+                [w for w in words if abs(w['top'] - course_top) < 6],
+                key=lambda x: x['x0']
+            )
+            course_code = ''
+            for w in course_line_words:
+                if w['text'] == 'Course:':
+                    continue
+                if re.match(r'^[A-Za-z]{2,5}\d{2,4}$', w['text']) and not course_code:
+                    course_code = w['text']
+                    break
+
+            # Date ranges
+            course_line_text = ' '.join(w['text'] for w in course_line_words)
+            date_ranges_raw = self._DATE_RANGE_RE.findall(course_line_text)
+
+            block_dates: list[datetime.datetime] = []
+            for (m1, d1, _m2, _d2) in date_ranges_raw:
+                s_dt = self._week_start_date(m1, d1, class_start_dt.year)
+                for i in range(7):
+                    block_dates.append(s_dt + datetime.timedelta(days=i))
+
+            if not block_dates:
+                m_course_basic = self._COURSE_RE.search(text)
+                if m_course_basic:
+                    dr_str = m_course_basic.group(2).strip()
+                    parts  = dr_str.split('-')[0].strip().split()
+                    if len(parts) >= 2:
+                        s_dt = self._week_start_date(parts[0], parts[1], class_start_dt.year)
+                        block_dates = [s_dt + datetime.timedelta(days=i) for i in range(7)]
+                    else:
+                        block_dates = [class_start_dt + datetime.timedelta(days=i) for i in range(7)]
+                else:
+                    block_dates = [class_start_dt + datetime.timedelta(days=i) for i in range(7)]
+
+            # Day words on Term Start line
+            day_words_on_term = sorted(
+                [w for w in words
+                 if re.match(r'^\d{2}$', w['text']) and abs(w['top'] - term_top) < 4],
+                key=lambda x: x['x0']
+            )
+            first_day_x = day_words_on_term[0]['x0'] if day_words_on_term else 117.0
+
+            # Day column centers
+            if len(day_words_on_term) == len(block_dates):
+                day_centers = [(w['x0'] + w['x1']) / 2 for w in day_words_on_term]
+            elif len(day_words_on_term) > 1:
+                step = (day_words_on_term[-1]['x1'] - day_words_on_term[0]['x0']) / len(block_dates)
+                day_centers = [day_words_on_term[0]['x0'] + step * (i + 0.5) for i in range(len(block_dates))]
+            else:
+                day_centers = [first_day_x + 17.0 * i for i in range(len(block_dates))]
+
+            # Course name
+            SMTWTFS = {'S', 'M', 'T', 'W', 'F'}
+            name_band_words = [
+                w for w in words
+                if w['top'] > course_top + 4 and w['top'] < term_top - 4
+                and w['text'] not in SMTWTFS
+            ]
+            name_band_rows = self._group_words_into_rows(name_band_words, y_tol=3.0)
+            course_name_parts: list[str] = []
+            for top_k in sorted(name_band_rows.keys()):
+                lw = sorted(name_band_rows[top_k], key=lambda x: x['x0'])
+                left_words = [w['text'] for w in lw if w['x0'] < first_day_x - 10]
+                if left_words:
+                    cleaned = re.sub(r'\s*S\s+M\s+T\s+W\s+T\s+F\s+S\s*$', '',
+                                     ' '.join(left_words)).strip()
+                    if cleaned:
+                        course_name_parts.append(cleaned)
+            course_name = ' '.join(course_name_parts)
+
+            # Block vertical bounds
+            if block_idx + 1 < len(course_word_tops):
+                next_block_top = course_word_tops[block_idx + 1]
+            else:
+                next_block_top = footer_y
+
+            block_red_rects = [
+                r for r in red_rects
+                if term_top < (r['top'] + r['bottom']) / 2 < next_block_top
+            ]
+
+            body_words = [
+                w for w in words
+                if w['top'] > term_top + 5
+                and w['top'] < min(next_block_top - 5, footer_y)
+                and w['text'] not in self._FOOTER_WORDS
+            ]
+
+            raw_lines = self._group_words_into_rows(body_words)
+
+            students: list[dict] = []
+            current_student: dict | None = None
+
+            def _map_x_to_col(cx: float) -> int:
+                return min(range(len(day_centers)), key=lambda idx: abs(cx - day_centers[idx]))
+
+            for top_k in sorted(raw_lines.keys()):
+                lw = sorted(raw_lines[top_k], key=lambda x: x['x0'])
+                if not lw:
+                    continue
+                first_w = lw[0]['text']
+
+                if self._STUDENT_ID_RE.match(first_w):
+                    if current_student is not None:
+                        students.append(current_student)
+                    student_id = first_w
+                    name_parts: list[str] = []
+                    hours_map: dict[int, object] = {}
+                    row_tops = [top_k]
+
+                    for w in lw[1:]:
+                        if w['x0'] >= first_day_x - 3:
+                            cx = (w['x0'] + w['x1']) / 2
+                            col_idx = _map_x_to_col(cx)
+                            txt = w['text'].strip()
+                            if txt.upper() == 'I':
+                                hours_map[col_idx] = 'I'
+                            else:
+                                try:
+                                    val = float(txt)
+                                    hours_map[col_idx] = int(val) if val == int(val) else val
+                                except ValueError:
+                                    hours_map[col_idx] = txt
+                        else:
+                            name_parts.append(w['text'])
+
+                    current_student = {
+                        'id': student_id,
+                        'name_parts': name_parts,
+                        'hours_map': hours_map,
+                        'row_tops': row_tops,
+                    }
+                else:
+                    # Continuation line
+                    if current_student is not None:
+                        current_student['row_tops'].append(top_k)
+                        for w in lw:
+                            if w['x0'] >= first_day_x - 3:
+                                cx = (w['x0'] + w['x1']) / 2
+                                col_idx = _map_x_to_col(cx)
+                                txt = w['text'].strip()
+                                if txt.upper() == 'I':
+                                    current_student['hours_map'][col_idx] = 'I'
+                                else:
+                                    try:
+                                        val = float(txt)
+                                        current_student['hours_map'][col_idx] = int(val) if val == int(val) else val
+                                    except ValueError:
+                                        current_student['hours_map'][col_idx] = txt
+                            else:
+                                current_student['name_parts'].append(w['text'])
+
+            if current_student is not None:
+                students.append(current_student)
+
+            # Match red rectangles (absent marker) to students
+            for st in students:
+                st_min_y = min(st['row_tops']) - 4
+                st_max_y = max(st['row_tops']) + 7
+                for r in block_red_rects:
+                    rcy = (r['top'] + r['bottom']) / 2
+                    if st_min_y <= rcy <= st_max_y:
+                        rcx = (r['x0'] + r['x1']) / 2
+                        col_idx = _map_x_to_col(rcx)
+                        st['hours_map'][col_idx] = 'Absent'
+
+            course_val = (course_code if has_course_name_col and not has_course_code_col
+                          else course_name)
+
+            # ── 3g. Emit rows (date outer loop, student inner loop) ─────────
+            for col_idx, dt in enumerate(block_dates):
+                for st in students:
+                    name = ' '.join(st['name_parts']).strip()
+                    hours = st['hours_map'].get(col_idx, 0)
+                    row = {
+                        'Instructor':   instructor,
+                        'Room':         room,
+                        'Class Start':  class_start_dt,
+                        'Course Code':  course_code,
+                        'Course':       course_val,
+                        'Course Name':  course_name,
+                        'Term Start':   term_start_dt,
+                        'Id':           st['id'],
+                        'Student Id':   st['id'],
+                        'Name':         name,
+                        'Student Name': name,
+                        'Date':         dt,
+                        'Attended Hours':  hours,
+                        'Attanded Hours':  hours,
+                        'source_file':  source_file,
+                        'page_number':  page_number,
+                    }
+                    all_rows.append(row)
+
+        # ── 4. If no blocks found via coordinate path, try text fallback ──
+        if not all_rows and not words:
+            all_rows = self._text_fallback(text, instructor, room, class_start_dt,
+                                           term_start_dt, source_file, page_number)
+
+        return all_rows
+
+    def _text_fallback(self, text: str, instructor: str, room: str,
+                       class_start_dt: datetime.datetime,
+                       term_start_dt: datetime.datetime,
+                       source_file: str, page_number: int) -> list[dict]:
+        """Plain-text fallback for pages where pdfplumber returns no words."""
+        m_course_basic = self._COURSE_RE.search(text)
+        if not m_course_basic:
+            return []
+        course_code    = m_course_basic.group(1).strip()
+        date_range_str = m_course_basic.group(2).strip()
+        start_month_str, start_day_str = date_range_str.split('-')[0].strip().split()
+        start_dt = datetime.datetime.strptime(
+            f"{start_month_str} {int(start_day_str):02d} {class_start_dt.year}", "%b %d %Y"
+        )
+        dates = [start_dt + datetime.timedelta(days=i) for i in range(7)]
+        match_day_idx = next(
+            (i for i, d in enumerate(dates) if d.date() == class_start_dt.date()), 3
+        )
+
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        t_idx = next((i for i, l in enumerate(lines) if l.startswith('Term Start:')), None)
+
+        out_cols = [c.strip() for c in (self.output_columns or [])]
+        course_name = ''
+
+        students: list[dict] = []
+        curr: dict | None = None
+        if t_idx is not None:
+            for l in lines[t_idx + 1:]:
+                if 'Page ' in l or any(
+                    d in l for d in ('Monday,', 'Tuesday,', 'Wednesday,',
+                                     'Thursday,', 'Friday,', 'Saturday,', 'Sunday,')
+                ):
+                    continue
+                m_id = re.match(r'^([A-Z]{2,4}\d{4,6})\s+(.+)$', l)
+                if m_id:
+                    if curr:
+                        students.append(curr)
+                    sid = m_id.group(1)
+                    rem = m_id.group(2)
+                    m_hr = re.search(r'\b(\d+\.\d{2})\s*$', rem)
+                    if m_hr:
+                        val = float(m_hr.group(1))
+                        h   = int(val) if val == int(val) else val
+                        sname = rem[:m_hr.start()].strip()
+                    else:
+                        h, sname = 0, rem.strip()
+                    curr = {'id': sid, 'name': sname, 'hours_map': {match_day_idx: h}}
+                else:
+                    if curr:
+                        curr['name'] += ' ' + l.strip()
+            if curr:
+                students.append(curr)
+
+        rows: list[dict] = []
+        for day_idx, dt in enumerate(dates):
+            for st in students:
+                hours  = st['hours_map'].get(day_idx, 0)
+                name   = st['name'].strip()
+                rows.append({
+                    'Instructor':   instructor,
+                    'Room':         room,
+                    'Class Start':  class_start_dt,
+                    'Course Code':  course_code,
+                    'Course':       course_name,
+                    'Course Name':  course_name,
+                    'Term Start':   term_start_dt,
+                    'Id':           st['id'],
+                    'Student Id':   st['id'],
+                    'Name':         name,
+                    'Student Name': name,
+                    'Date':         dt,
+                    'Attended Hours':  hours,
+                    'Attanded Hours':  hours,
+                    'source_file':  source_file,
+                    'page_number':  page_number,
+                })
+        return rows
+
+    def extract_record(self, block: str, source_file: str = "N/A", page_number: int = 1) -> list[dict]:
+        """Extract records for a single block/page."""
+        words = self._cached_page_words.get(page_number, [])
+        rects = self._cached_page_rects.get(page_number, [])
+        page_height = 841.89
+        if not words and self._current_pdf_path and os.path.isfile(self._current_pdf_path):
+            try:
+                with pdfplumber.open(self._current_pdf_path) as pdf:
+                    if 1 <= page_number <= len(pdf.pages):
+                        page = pdf.pages[page_number - 1]
+                        words = page.extract_words()
+                        rects = page.rects or []
+                        page_height = float(page.height)
+                        self._cached_page_words[page_number] = words
+                        self._cached_page_rects[page_number] = rects
+            except Exception:
+                words = []
+                rects = []
+
+        return self.extract_page_data(block, words, rects=rects, source_file=source_file, page_number=page_number, page_height=page_height)
+
+    def _run_batch(self, source_folder, output_xlsx, config,
+                   on_progress=None, abort_flag=None, log=None,
+                   session_inputs=None):
+        output_dir = os.path.dirname(os.path.abspath(output_xlsx)) or "."
+        run_id = new_run_id()
+        file_logger = setup_run_logger(output_dir, run_id)
+
+        def _log(level: str, msg: str):
+            if log:
+                log(level, msg)
+            getattr(file_logger, level, file_logger.info)(msg)
+
+        _log("info", f"[attendance_roster] Source: {source_folder}")
+        _log("info", f"[attendance_roster] Output: {output_xlsx}")
+
+        pdf_paths = sorted(
+            {p for p in Path(source_folder).glob("*.pdf")} |
+            {p for p in Path(source_folder).glob("*.PDF")}
+        )
+        total = len(pdf_paths)
+
+        if on_progress:
+            on_progress({"type": "total", "total": total})
+
+        if total == 0:
+            msg = f"No PDF files found in: {source_folder}"
+            _log("error", msg)
+            raise RuntimeError(msg)
+
+        _session_inputs = session_inputs or {
+            "source_folder": source_folder,
+            "output_xlsx": output_xlsx,
+        }
+        session_data = SessionManager.start_session(MODULE_ID, _session_inputs, total_items=total)
+        completed_files = set(session_data.get("completed_item_ids", []))
+
+        all_rows = []
+        exec_log_rows = []
+        files_processed = 0
+        records_found = 0
+
+        for idx, pdf_path in enumerate(pdf_paths):
+            if abort_flag and abort_flag():
+                _log("warning", "Extraction aborted by user.")
+                break
+
+            if pdf_path.name in completed_files:
+                _log("info", f"[SESSION] Skipping {pdf_path.name} — already processed.")
+                if on_progress:
+                    on_progress({"type": "item_done", "completed": idx + 1, "total": total, "student_id": pdf_path.name})
+                continue
+
+            if on_progress:
+                on_progress({"type": "item_start", "idx": idx, "student_id": pdf_path.name, "total": total})
+
+            file_ts = datetime.datetime.now().isoformat(timespec="seconds")
+            file_rows_before = len(all_rows)
+            file_error = ""
+            file_records = 0
+
+            try:
+                _log("info", f"[{idx+1}/{total}] Processing: {pdf_path.name}")
+                with pdfplumber.open(str(pdf_path)) as pdf:
+                    for page_num, page in enumerate(pdf.pages, 1):
+                        text = page.extract_text() or ""
+                        words = page.extract_words()
+                        rects = page.rects or []
+                        p_rows = self.extract_page_data(text, words, rects=rects, source_file=pdf_path.name, page_number=page_num, page_height=float(page.height))
+                        if p_rows:
+                            file_records += 1
+                            all_rows.extend(p_rows)
+
+                rows_this_file = len(all_rows) - file_rows_before
+                records_found += file_records
+                files_processed += 1
+                status = "OK" if rows_this_file > 0 else "NO_ROWS"
+                _log("info", f"  -> {file_records} record(s), {rows_this_file} row(s) from {pdf_path.name}")
+                SessionManager.update_item_status(MODULE_ID, pdf_path.name, success=True)
+            except Exception as e:
+                file_error = describe_exception(e)
+                status = "ERROR"
+                _log("error", f"Error processing {pdf_path.name}: {file_error}")
+                SessionManager.update_item_status(MODULE_ID, pdf_path.name, success=False)
+
+            exec_log_rows.append({
+                "timestamp": file_ts,
+                "source_file": pdf_path.name,
+                "status": status,
+                "records_found": file_records,
+                "rows_written": len(all_rows) - file_rows_before,
+                "error_message": file_error,
+            })
+
+            if on_progress:
+                on_progress({"type": "item_done", "completed": idx + 1, "total": total, "student_id": pdf_path.name})
+        else:
+            SessionManager.clear_session(MODULE_ID)
+            _log("info", "[SESSION] All PDFs processed — session cleared.")
+
+        # Flush logs
+        write_execution_log_csv(output_dir, exec_log_rows, run_id)
+
+        if not all_rows:
+            msg = "No attendance roster data extracted. Check PDF format and patterns."
+            _log("error", msg)
+            raise RuntimeError(msg)
+
+        df = pd.DataFrame(all_rows)
+
+        configured_output = list(self.output_columns or [])
+        final_cols = []
+        for col in configured_output:
+            if col not in final_cols and col in df.columns:
+                final_cols.append(col)
+
+        default_order = [
+            "Instructor", "Room", "Class Start", "Course Code", "Course",
+            "Term Start", "Id", "Name", "Date", "Attended Hours"
+        ]
+        for col in default_order:
+            if col not in final_cols and col in df.columns:
+                final_cols.append(col)
+
+        for col in df.columns:
+            if col not in ("_partial", "Student Id", "Attanded Hours", "source_file", "page_number") and col not in final_cols:
+                final_cols.append(col)
+
+        for meta in ("source_file", "page_number"):
+            if meta in df.columns and meta not in final_cols and meta in configured_output:
+                final_cols.append(meta)
+
+        df = df[final_cols]
+
+        out_dir = os.path.dirname(output_xlsx)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        df.to_excel(output_xlsx, index=False, engine="openpyxl")
+
+        result = {
+            "files_processed": files_processed,
+            "total_files": total,
+            "records": records_found,
+            "rows": len(all_rows),
+            "output": output_xlsx,
+        }
+        _log("info", f"Extraction complete: {result}")
+        for h in list(file_logger.handlers):
+            try:
+                h.close()
+                file_logger.removeHandler(h)
+            except Exception:
+                pass
         return result
 
 
@@ -2412,6 +3181,15 @@ class BatchPDFToExcelExporter:
 
     def run(self, source_folder, output_xlsx, config, on_progress=None, abort_flag=None, log=None,
             session_inputs=None):
+        # Route to the dedicated Attendance Roster extractor when requested.
+        if config.get("report_type") in ("attendance_roster", "attendance"):
+            are = AttendanceRosterExtractor(config)
+            return are._run_batch(
+                source_folder, output_xlsx, config,
+                on_progress=on_progress, abort_flag=abort_flag, log=log,
+                session_inputs=session_inputs,
+            )
+
         # Route to the dedicated Student Schedule extractor when requested.
         if config.get("report_type") == "student_schedule":
             sse = StudentScheduleExtractor(config)

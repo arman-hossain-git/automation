@@ -94,9 +94,16 @@ class FileUploaderView(BaseToolWidget):
         o_grid = QGridLayout(opts_group)
         o_grid.setSpacing(10)
 
-        self.chk_allow_dups = QCheckBox("Allow Duplicate Uploads")
-        self.chk_allow_dups.setChecked(False)
-        o_grid.addWidget(self.chk_allow_dups, 0, 0)
+        # Skip-duplicates checkbox: checked (default) = inspect portal before uploading.
+        # Unchecked = force re-upload / overwrite regardless of what is already on portal.
+        self.chk_skip_dups = QCheckBox("Skip Duplicate Files (Check Destination Page)")
+        self.chk_skip_dups.setChecked(True)   # ON by default
+        self.chk_skip_dups.setToolTip(
+            "When checked (default): inspect the destination folder before uploading each file.\n"
+            "Files already present on the portal are skipped and logged as already uploaded.\n"
+            "Uncheck ONLY to force re-upload / overwrite all files on the portal."
+        )
+        o_grid.addWidget(self.chk_skip_dups, 0, 0)
 
         self.chk_devtools = QCheckBox("Auto-open Chrome DevTools")
         self.chk_devtools.setChecked(settings.get("auto_open_devtools", False))
@@ -159,7 +166,7 @@ class FileUploaderView(BaseToolWidget):
             "source_dir": self.source_dir,
             "links_path": self.links_path,
             "target_folder": target_folder,
-            "allow_dups": self.chk_allow_dups.isChecked(),
+            "skip_dups": self.chk_skip_dups.isChecked(),
             "auto_devtools": self.chk_devtools.isChecked(),
             "n_workers": self.spin_workers.value(),
         }
@@ -202,14 +209,20 @@ class FileUploaderView(BaseToolWidget):
                 prog_cb(data.get("students_traversed", data.get("idx", 0)), data.get("total_students", len(students)))
             kpi_cb(data)
 
-        log_cb(f"Initializing File Uploader engine "
-               f"({'parallel ×' + str(n_workers) if n_workers > 1 else 'sequential'})...", "INFO")
+        # skip_dups=True (default) -> check portal before uploading (allow_duplicates=False).
+        # skip_dups=False -> force re-upload regardless (allow_duplicates=True).
+        skip_dups = inputs.get("skip_dups", True)   # default: always check portal
+        allow_dups = not skip_dups
+        n_str = "parallel x" + str(n_workers) if n_workers > 1 else "sequential"
+        dup_str = "enabled (skip if already uploaded)" if skip_dups else "disabled (force re-upload)"
+        log_cb(f"Initializing File Uploader engine ({n_str}) | Duplicate check: {dup_str}...", "INFO")
         common_kwargs = dict(
             config=config,
             students=students,
             source_dir=inputs["source_dir"],
             target_folder_name=inputs.get("target_folder", ""),
             devtools=inputs.get("auto_devtools", False),
+            allow_duplicates=allow_dups,
             on_progress=on_progress,
             abort_flag=is_aborted,
             log=lambda lvl, msg: log_cb(msg, lvl.upper()),

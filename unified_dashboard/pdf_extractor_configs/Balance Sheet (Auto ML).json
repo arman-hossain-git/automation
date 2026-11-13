@@ -1,0 +1,109 @@
+{
+  "report_type": "balance_sheet",
+  "document_title": "Balance Sheet",
+  "record_separator": "Bayamon Community College",
+  "exclude_patterns": [
+    "Page\\s+\\d+\\s+of\\s+\\d+",
+    "Powered by TCPDF.*",
+    "https?://\\S+",
+    "^\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}",
+    "^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),.*Page\\s+\\d+",
+    "^Estimated Fees",
+    "^Estimated Disbursements"
+  ],
+  "name_detection": {
+    "output_column": "student_name",
+    "pattern": "^([A-Za-z\\u00C0-\\u00FF\\s'.-]+,\\s*[A-Za-z\\u00C0-\\u00FF\\s'.-]+)$",
+    "stop_at": ""
+  },
+  "address_block": null,
+  "repeating_sections": [],
+  "summary_fields": [
+    {
+      "name": "campus",
+      "pattern": "Campus:[ \\t]*([A-Za-z0-9\\s]+?)(?=[ \\t]*\\r?\\n|$)"
+    },
+    {
+      "name": "program",
+      "pattern": "Program:[ \\t]*(.+?)(?=[ \\t]*\\r?\\n|$)"
+    },
+    {
+      "name": "id",
+      "pattern": "ID:[ \\t]*([A-Za-z0-9\\-]+)"
+    },
+    {
+      "name": "status",
+      "pattern": "Status:[ \\t]*([A-Za-z\\s/]+?)(?=\\s+(?:PO\\s+Box|Po\\s+Box|hc\\s+|Calle|Urb|\\d|[A-Z]{2}\\b)|\\r?\\n|$)"
+    },
+    {
+      "name": "dob",
+      "pattern": "DOB:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "first_term",
+      "pattern": "First Term:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "phone",
+      "pattern": "Phone:[ \\t]*([0-9\\-\\(\\)\\s]+?)(?=\\s+Exp|\\r?\\n|$)"
+    },
+    {
+      "name": "exp_grad",
+      "pattern": "Exp\\.?\\s*Grad:[ \\t]*(\\d{2}/\\d{2}/\\d{4})"
+    },
+    {
+      "name": "estimated_program_cost",
+      "pattern": "Estimated Program Cost.*?([-]?\\$?\\s*[\\d,]+\\.\\d{2})\\s*$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "estimated_cost_of_attendance",
+      "pattern": "Estimated Cost of Attendance.*?([-]?\\$?\\s*[\\d,]+\\.\\d{2})\\s*$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "total_estimated_disbursements",
+      "pattern": "Total Estimated Disbursements.*?([-]?\\$?\\s*[\\d,]+\\.\\d{2})\\s*$",
+      "flags": "MULTILINE"
+    },
+    {
+      "name": "projected_balance",
+      "pattern": "Projected Balance.*?([-]?\\$?\\s*[\\d,]+\\.\\d{2})\\s*$",
+      "flags": "MULTILINE"
+    }
+  ],
+  "computed_fields": [],
+  "data_rows": {
+    "pattern": "^(?!(?:Estimated\\s+(?:Program|Cost)|Total\\s+Estimated|Projected\\s+Balance))([A-Za-z0-9].+?)\\s+[-]?\\$\\s*[\\d,.]+(?:\\s+[-]?\\$\\s*[\\d,.]+)*\\s+([-]?\\$\\s*[\\d,.]+)$",
+    "columns": [
+      "item_description",
+      "total_amount"
+    ]
+  },
+  "output_columns": [
+    "student_name",
+    "id",
+    "program",
+    "campus",
+    "status",
+    "dob",
+    "first_term",
+    "exp_grad",
+    "phone",
+    "estimated_program_cost",
+    "estimated_cost_of_attendance",
+    "total_estimated_disbursements",
+    "projected_balance",
+    "item_description",
+    "total_amount",
+    "source_file",
+    "page_number"
+  ],
+  "ml_metadata": {
+    "synthesizer": "dbscan_spatial_ml",
+    "source_sample": "Balance_Sheet--2015-2018.pdf",
+    "detected_report_type": "balance_sheet",
+    "detected_fields_count": 12,
+    "table_detected": true
+  }
+}

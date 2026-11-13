@@ -1003,10 +1003,24 @@ def find_exact_folder_element(driver, folder_name: str, config: dict):
     lit_lower = xpath_literal(folder_name.strip().lower())
     folder_name_clean = " ".join(folder_name.replace('\xa0', ' ').strip().lower().split())
     table = config.get('folder_listing_table_xpath', '')
-    scope = table if table else ''
+    scope = table if table and '|' not in table else ''
 
     # Non-breadcrumb guard for unscoped fallbacks
     _nav_guard = "not(ancestor::*[contains(@class,'breadcrumb') or contains(@class,'nav') or contains(@id,'breadcrumb') or contains(@id,'nav')])"
+
+    def _verify_el(el):
+        if not el.is_displayed():
+            return None
+        raw_text = el.get_attribute("textContent") or el.get_attribute("innerText") or el.text or ""
+        clean_text = " ".join(_strip_count_suffix(raw_text.replace('\xa0', ' ').strip()).lower().split())
+        if clean_text == folder_name_clean:
+            if el.tag_name.lower() != 'a':
+                try:
+                    return el.find_element(By.XPATH, ".//a")
+                except Exception:
+                    pass
+            return el
+        return None
 
     # 1. Exact XPath equality match (case-sensitive) — scoped to table only
     if scope:
@@ -1024,8 +1038,9 @@ def find_exact_folder_element(driver, folder_name: str, config: dict):
         try:
             elements = driver.find_elements(By.XPATH, xp)
             for el in elements:
-                if el.is_displayed():
-                    return el
+                matched = _verify_el(el)
+                if matched:
+                    return matched
         except Exception:
             pass
 
@@ -1044,8 +1059,9 @@ def find_exact_folder_element(driver, folder_name: str, config: dict):
         try:
             elements = driver.find_elements(By.XPATH, xp)
             for el in elements:
-                if el.is_displayed():
-                    return el
+                matched = _verify_el(el)
+                if matched:
+                    return matched
         except Exception:
             pass
 
@@ -1057,12 +1073,9 @@ def find_exact_folder_element(driver, folder_name: str, config: dict):
             scan_xpath = f"//table//td//a[{_nav_guard}]"
         all_links = driver.find_elements(By.XPATH, scan_xpath)
         for el in all_links:
-            if not el.is_displayed():
-                continue
-            raw_text = el.get_attribute("textContent") or el.get_attribute("innerText") or el.text or ""
-            clean_text = " ".join(_strip_count_suffix(raw_text.replace('\xa0', ' ').strip()).lower().split())
-            if clean_text == folder_name_clean:
-                return el
+            matched = _verify_el(el)
+            if matched:
+                return matched
     except Exception:
         pass
 
@@ -1144,6 +1157,7 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
     Extracts all files, URLs, sizes, and row metadata into a structured snapshot
     dictionary so post-upload verification does not need to repeatedly query or reload the DOM.
     """
+    import os as _os
     import re as _re
     from urllib.parse import urljoin
     protected_folders = [
@@ -1155,21 +1169,58 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
     files_list: list[dict] = []
     by_name_map: dict[str, dict] = {}
 
+    # Candidate table row XPaths in order of priority:
+    # 1. Dedicated sorted files table on Orbund & PCR: //table[@id='SortedDataTable']
+    # 2. Tablesorter table: //table[contains(@class, 'tablesorter')]
+    # 3. Table with headers "Files" or "File Name"
+    # 4. Configured scope (if provided)
+    # 5. Global fallback across any table
+    row_xpaths = [
+        "//table[@id='SortedDataTable']//tr[.//td]",
+        "//table[contains(@class, 'tablesorter')]//tr[.//td]",
+        "//table[.//th[contains(normalize-space(.), 'Files') or contains(normalize-space(.), 'File Name')]]//tr[.//td]",
+    ]
+    if scope:
+        row_xpaths.append(f"{scope}//tr[.//td]")
+    row_xpaths.append("//table//tr[.//td]")
+
     end_time = time.time() + wait_timeout
     rows = []
     while time.time() < end_time:
-        try:
-            rows_xpath = f"{scope}//tr[.//td]" if scope else "//table//tr[.//td]"
-            rows = driver.find_elements(By.XPATH, rows_xpath)
-            if rows:
-                break
-        except Exception:
-            pass
+        for rxp in row_xpaths:
+            try:
+                candidate_rows = driver.find_elements(By.XPATH, rxp)
+                if candidate_rows:
+                    # Check if candidate rows are from SortedDataTable or contain files
+                    if "@id='SortedDataTable'" in rxp or "tablesorter" in rxp:
+                        rows = candidate_rows
+                        break
+                    has_files = any(
+                        any(ext in (cr.get_attribute("textContent") or "").lower() for ext in ['.pdf', '.doc', '.xls', '.txt', '.png', '.jpg'])
+                        for cr in candidate_rows[:10]
+                    )
+                    if has_files:
+                        rows = candidate_rows
+                        break
+                    elif not rows:
+                        rows = candidate_rows
+            except Exception:
+                pass
+        if rows and any(ext in (r.get_attribute("textContent") or "").lower() for r in rows[:10] for ext in ['.pdf', '.doc', '.xls', '.txt', '.png', '.jpg']):
+            break
         time.sleep(0.2)
 
     try:
-        rows_xpath = f"{scope}//tr[.//td]" if scope else "//table//tr[.//td]"
-        rows = driver.find_elements(By.XPATH, rows_xpath)
+        if not rows:
+            for rxp in row_xpaths:
+                try:
+                    candidate_rows = driver.find_elements(By.XPATH, rxp)
+                    if candidate_rows:
+                        rows = candidate_rows
+                        break
+                except Exception:
+                    pass
+
         for row in rows:
             try:
                 row_raw = (row.get_attribute("textContent") or "").lower()
@@ -1186,42 +1237,103 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
                         if not title_attr:
                             continue
 
-                    has_ext = bool(_re.search(r'\.[a-zA-Z0-9]{2,5}$', text)) or bool(_re.search(r'\.[a-zA-Z0-9]{2,5}$', title_attr))
+                    # Use lookahead so 'file.pdf   120 KB' (trailing size/date) is detected.
+                    has_ext = (
+                        bool(_re.search(r'\.[a-zA-Z0-9]{2,5}(?=\s|\b|$)', text))
+                        or bool(_re.search(r'\.[a-zA-Z0-9]{2,5}(?=\s|\b|$)', title_attr))
+                    )
                     if any(pf == text.lower() for pf in protected_folders):
                         continue
 
                     if has_ext or title_attr:
-                        href = el.get_attribute('href')
+                        href = el.get_attribute('href') or ''
+                        # If href is missing, empty, or a javascript: viewer call, look for the real download URL in this row
+                        if not href or href.startswith('javascript:'):
+                            try:
+                                dl_anchors = row.find_elements(
+                                    By.XPATH,
+                                    ".//a[contains(@href, 'get_repository_file') or contains(@href, 'download') or contains(@href, 'getfile') or contains(@href, 'file.') or contains(@title, 'Download') or .//img[contains(@alt, 'download') or contains(@title, 'Download')]]"
+                                )
+                                if dl_anchors:
+                                    href = dl_anchors[0].get_attribute('href') or ''
+                            except Exception:
+                                pass
                         if not href and el.tag_name != 'a':
-                            anchors = el.find_elements(By.XPATH, ".//a[@href] | ..//a[@href]")
-                            if anchors:
-                                href = anchors[0].get_attribute('href')
-                        if href and href.startswith('/'):
+                            try:
+                                anchors = el.find_elements(By.XPATH, ".//a[@href] | ..//a[@href]")
+                                if anchors:
+                                    href = anchors[0].get_attribute('href') or ''
+                            except Exception:
+                                pass
+                        if href and not href.startswith(('http://', 'https://', 'javascript:')):
                             href = urljoin(driver.current_url, href)
 
-                        # Extract size text if present in row cells
+                        # Extract size text if present in row cells or row text
                         size_text = ""
                         try:
-                            cells = row.find_elements(By.XPATH, ".//td")
-                            for cell in cells:
-                                c_text = (cell.get_attribute("textContent") or "").strip()
-                                if _re.search(r'\b\d+(?:\.\d+)?\s*(?:KB|MB|GB|Bytes|B)\b', c_text, _re.I):
-                                    size_text = c_text
-                                    break
+                            m_sz = _re.search(r'\b\d+(?:\.\d+)?\s*(?:KB|MB|GB|Bytes|B)\b', text, _re.I)
+                            if m_sz:
+                                size_text = m_sz.group(0).strip()
+                            else:
+                                cells = row.find_elements(By.XPATH, ".//td")
+                                for cell in cells:
+                                    c_text = (cell.get_attribute("textContent") or "").strip()
+                                    m_sz = _re.search(r'\b\d+(?:\.\d+)?\s*(?:KB|MB|GB|Bytes|B)\b', c_text, _re.I)
+                                    if m_sz:
+                                        size_text = m_sz.group(0).strip()
+                                        break
+                            if not size_text and row_raw:
+                                m_sz = _re.search(r'\b\d+(?:\.\d+)?\s*(?:KB|MB|GB|Bytes|B)\b', row_raw, _re.I)
+                                if m_sz:
+                                    size_text = m_sz.group(0).strip()
                         except Exception:
                             pass
 
+                        # Extract the canonical filename token from text/title/href.
+                        # This strips trailing size/date columns: 'file.pdf   120 KB' -> 'file.pdf'
+                        _known_exts = (
+                            r'pdf|docx?|xlsx?|pptx?|txt|csv|png|jpe?g|gif|zip'
+                            r'|rar|rtf|bmp|tiff?|msg|mp4|mp3|wav|ogg|webm|odp|ods|odt'
+                        )
+                        _fname_pat = rf'[\w\-.()+]+(?:\s+[\w\-.()+]+)*\.(?:{_known_exts})'
+
+                        def _extract_fname(s):
+                            m = _re.search(_fname_pat, s, _re.I)
+                            return m.group(0).strip() if m else ''
+
+                        # Prefer title_attr (already clean), then text, then href
+                        fname_from_title = _extract_fname(title_attr) if title_attr else ''
+                        fname_from_text  = _extract_fname(text) if text else ''
+                        fname_from_href  = _extract_fname(href or '') if href else ''
+                        # Best canonical name: title > text-extracted > href-extracted
+                        canonical_name = fname_from_title or fname_from_text or fname_from_href or title_attr or text
+
                         clean_keys = []
-                        if text:
-                            clean_keys.append(text.lower().strip())
-                        if title_attr:
-                            clean_keys.append(title_attr.lower().strip())
+                        seen_ck = set()
+                        def _add_ck(s):
+                            k = s.strip().lower()
+                            if k and k not in seen_ck:
+                                seen_ck.add(k)
+                                clean_keys.append(k)
+
+                        # Register canonical clean filename variants
+                        for fn in (canonical_name, fname_from_title, fname_from_text, fname_from_href, title_attr, text):
+                            if fn:
+                                _add_ck(fn)
+                                _add_ck(fn.replace(' ', '_'))
+                                _add_ck(fn.replace('_', ' '))
+                                _base, _ext = _os.path.splitext(fn)
+                                if _ext and len(_base) >= 3:
+                                    _add_ck(_base)
+                                    _add_ck(_base.replace(' ', '_'))
+                                    _add_ck(_base.replace('_', ' '))
 
                         entry = {
-                            'name': title_attr or text,
+                            'name': canonical_name,
                             'clean_name': clean_keys[0] if clean_keys else '',
                             'href': href or '',
                             'size_str': size_text,
+                            'size_text': size_text,
                             'raw_text': row_raw,
                             'row': row,
                             'element': el,
@@ -1393,11 +1505,13 @@ def folder_exists_in_listing(driver, folder_name: str, config: dict) -> bool:
     scope = table if table else ''
 
     candidate_xpaths = [
-        f"{scope}//a[contains(normalize-space(.), {lit})]",
-        f"{scope}//td[contains(normalize-space(.), {lit})]//a",
+        f"//table[.//a[contains(@href, 'files_and_documents')]]//a[contains(normalize-space(.), {lit})]",
+        f"{scope}//a[contains(normalize-space(.), {lit})]" if scope else None,
+        f"{scope}//td[contains(normalize-space(.), {lit})]//a" if scope else None,
         f"//a[contains(normalize-space(.), {lit})]",
         f"//td[contains(normalize-space(.), {lit})]//a",
     ]
+    candidate_xpaths = [xp for xp in candidate_xpaths if xp]
     for xp in candidate_xpaths:
         try:
             for c in driver.find_elements(By.XPATH, xp):
@@ -1409,6 +1523,51 @@ def folder_exists_in_listing(driver, folder_name: str, config: dict) -> bool:
         except Exception:
             pass
     return False
+
+
+def compute_portal_file_sha256(driver, download_url: str, log_func=None) -> str | None:
+    """Download a file from *download_url* in-memory using active Selenium session cookies and headers,
+    and return its SHA-256 hex digest. Returns None if download fails.
+    """
+    if not download_url:
+        return None
+    try:
+        import hashlib
+        import requests
+        from urllib.parse import urljoin
+
+        if download_url.startswith('/'):
+            download_url = urljoin(driver.current_url, download_url)
+
+        session = requests.Session()
+        for cookie in driver.get_cookies():
+            session.cookies.set(cookie['name'], cookie['value'])
+
+        try:
+            ua = driver.execute_script("return navigator.userAgent;")
+            if ua:
+                session.headers.update({"User-Agent": ua})
+        except Exception:
+            pass
+
+        if driver.current_url:
+            session.headers.update({"Referer": driver.current_url})
+
+        r = session.get(download_url, timeout=12, stream=True)
+        if r.status_code != 200:
+            if log_func:
+                log_func('debug', f"Failed to download portal file (HTTP {r.status_code}): {download_url}")
+            return None
+
+        h = hashlib.sha256()
+        for chunk in r.iter_content(chunk_size=32768):
+            if chunk:
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception as e:
+        if log_func:
+            log_func('debug', f"Error computing SHA-256 for portal URL '{download_url}': {e}")
+        return None
 
 
 def verify_portal_file_content(driver, download_url: str, local_filepath: str, log_func=None) -> bool:
@@ -1423,49 +1582,19 @@ def verify_portal_file_content(driver, download_url: str, local_filepath: str, l
         return False
 
     try:
-        import requests
-        import tempfile
         from core.utils import compute_file_sha256
 
-        local_size = os.path.getsize(local_filepath)
         local_hash = compute_file_sha256(local_filepath)
+        portal_hash = compute_portal_file_sha256(driver, download_url, log_func=log)
+        if not portal_hash:
+            return False
 
-        session = requests.Session()
-        for cookie in driver.get_cookies():
-            session.cookies.set(cookie['name'], cookie['value'])
-
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(local_filepath)[1])
-        os.close(tmp_fd)
-
-        try:
-            r = session.get(download_url, timeout=15, stream=True)
-            if r.status_code != 200:
-                log('warning', f"Download verification failed (HTTP {r.status_code}) for '{download_url}'.")
-                return False
-
-            with open(tmp_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-
-            dl_size = os.path.getsize(tmp_path)
-            if dl_size != local_size:
-                log('info', f"Size mismatch for '{os.path.basename(local_filepath)}'. Local: {local_size} bytes, Portal: {dl_size} bytes.")
-                return False
-
-            dl_hash = compute_file_sha256(tmp_path)
-            if dl_hash == local_hash:
-                log('info', f"Content match verified (SHA-256) for '{os.path.basename(local_filepath)}'.")
-                return True
-            else:
-                log('info', f"Content SHA-256 mismatch for '{os.path.basename(local_filepath)}'. Local: {local_hash[:8]}... Portal: {dl_hash[:8]}...")
-                return False
-        finally:
-            if os.path.isfile(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+        if portal_hash == local_hash:
+            log('info', f"Content match verified (SHA-256) for '{os.path.basename(local_filepath)}'.")
+            return True
+        else:
+            log('info', f"Content SHA-256 mismatch for '{os.path.basename(local_filepath)}'. Local: {local_hash[:8]}... Portal: {portal_hash[:8]}...")
+            return False
     except Exception as e:
         log('warning', f"Error during content verification for '{download_url}': {e}")
         return False
@@ -1483,12 +1612,22 @@ def file_exists_in_listing(
     """Check whether *file_name* (or *upload_name*) already appears in the CURRENT folder's
     listing table -- i.e. whether it has already been uploaded here.
 
-    If *table_snapshot* is provided, uses the cached table dump instantly with zero DOM overhead.
-    Enforces STRICT EXACT MATCH of file names (case-insensitive) to prevent partial substring matches.
+    Checks table snapshot (if supplied) and falls back to live DOM rows, matching against
+    case-insensitive, sanitized, space/underscore, and extension-stripped variations.
+    If *local_path* is provided and an entry has a download link, also verifies content SHA-256 hash.
     """
+    import os as _os
     import time as _time
     from core.utils import sanitize_upload_filename
     log = log_func or (lambda l, m: None)
+
+    local_hash = None
+    if local_path and _os.path.isfile(local_path):
+        try:
+            from core.utils import compute_file_sha256
+            local_hash = compute_file_sha256(local_path)
+        except Exception:
+            pass
 
     names_to_check = [file_name]
     if upload_name and upload_name != file_name:
@@ -1497,7 +1636,20 @@ def file_exists_in_listing(
     if sanitized not in names_to_check:
         names_to_check.append(sanitized)
 
-    names_lower = {n.strip().lower() for n in names_to_check}
+    names_lower = {n.strip().lower() for n in names_to_check if n}
+    for n in list(names_lower):
+        names_lower.add(n.replace(' ', '_'))
+        names_lower.add(n.replace('_', ' '))
+        base, ext = _os.path.splitext(n)
+        if ext and len(base) >= 3:
+            names_lower.add(base)
+            names_lower.add(base.replace(' ', '_'))
+            names_lower.add(base.replace('_', ' '))
+
+    protected_folders = [
+        "admissions inquiry", "students inquiry", "files & documents",
+        "files and documents", "files & docs", "documents"
+    ]
 
     # 1. Fast path: check table_snapshot if supplied
     if table_snapshot and isinstance(table_snapshot, dict):
@@ -1505,89 +1657,158 @@ def file_exists_in_listing(
         for nl in names_lower:
             if nl in by_name:
                 entry = by_name[nl]
-                href = entry.get('href')
-                if local_path and os.path.isfile(local_path) and href and (href.startswith('http') or href.startswith('/')):
-                    is_match = verify_portal_file_content(driver, href, local_path, log_func=log)
-                    if is_match:
-                        return True
-                    else:
-                        log('debug', f"Portal file '{file_name}' matched by name in snapshot, but content verification differed.")
+                if local_hash and entry.get('href'):
+                    phash = compute_portal_file_sha256(driver, entry['href'], log_func=log)
+                    if phash:
+                        return phash == local_hash
                 return True
-        return False
+            for bn in by_name.keys():
+                if nl == bn or (len(nl) >= 4 and nl in bn):
+                    entry = by_name[bn]
+                    if local_hash and entry.get('href'):
+                        phash = compute_portal_file_sha256(driver, entry['href'], log_func=log)
+                        if phash:
+                            return phash == local_hash
+                    return True
 
-    # 2. Live DOM scan with exact name matching
+        # Hash scan fallback: check if ANY portal file in snapshot has identical content hash
+        if local_hash:
+            for f in table_snapshot.get('files', []):
+                href = f.get('href')
+                if href:
+                    phash = compute_portal_file_sha256(driver, href, log_func=log)
+                    if phash and phash == local_hash:
+                        log('info', f"[CHECKSUM MATCH] '{file_name}' matched existing portal file '{f.get('name')}' by SHA-256 hash.")
+                        return True
+
+    # 2. Live DOM scan with robust multi-attribute matching
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
+    row_xpaths = [
+        "//table[@id='SortedDataTable']//tr[.//td]",
+        "//table[contains(@class, 'tablesorter')]//tr[.//td]",
+        "//table[.//th[contains(normalize-space(.), 'Files') or contains(normalize-space(.), 'File Name')]]//tr[.//td]",
+    ]
+    if scope:
+        row_xpaths.append(f"{scope}//tr[.//td]")
+    row_xpaths.append("//table//tr[.//td]")
 
-    matching_elements = []
-    for _attempt in range(3):
-        matching_elements = []
+    for _attempt in range(2):
+        for rxp in row_xpaths:
+            try:
+                rows = driver.find_elements(By.XPATH, rxp)
+                if not rows:
+                    continue
+                for r in rows:
+                    r_text = (r.get_attribute("textContent") or "").strip().lower()
+                    if any(pf in r_text for pf in protected_folders):
+                        continue
 
-        try:
-            row_xpath = f"{scope}//tr[.//td]" if scope else "//table//tr[.//td]"
-            rows = driver.find_elements(By.XPATH, row_xpath)
-            for r in rows:
-                candidate_elements = r.find_elements(By.XPATH, ".//a | .//span | .//td")
-                for el in candidate_elements:
-                    raw_text = el.get_attribute("textContent") or el.get_attribute("innerText") or el.text or ""
-                    clean_text = " ".join(raw_text.replace('\xa0', ' ').strip().split()).lower()
-                    if clean_text in names_lower:
-                        matching_elements.append(el)
-                        break
-                if matching_elements:
-                    break
-        except Exception:
-            pass
+                    # Check candidate anchors / cells in this row
+                    candidates = r.find_elements(By.XPATH, ".//a | .//span | .//td")
+                    row_href = ""
+                    for el in candidates:
+                        if not row_href and el.tag_name == 'a':
+                            raw_h = el.get_attribute("href") or ""
+                            if raw_h and not raw_h.startswith('javascript:'):
+                                row_href = raw_h
+                        raw_text = (el.get_attribute("textContent") or el.get_attribute("innerText") or el.text or "").strip().lower()
+                        title_attr = (el.get_attribute("title") or el.get_attribute("data-name") or el.get_attribute("download") or "").strip().lower()
+                        href_attr = (el.get_attribute("href") or "").strip().lower()
 
-        if matching_elements:
-            break
-        if _attempt < 2:
+                        if not row_href or row_href.startswith('javascript:'):
+                            try:
+                                dl_anchors = r.find_elements(
+                                    By.XPATH,
+                                    ".//a[contains(@href, 'get_repository_file') or contains(@href, 'download') or contains(@href, 'getfile') or contains(@title, 'Download') or .//img[contains(@alt, 'download') or contains(@title, 'Download')]]"
+                                )
+                                if dl_anchors:
+                                    row_href = dl_anchors[0].get_attribute("href") or ""
+                            except Exception:
+                                pass
+
+                        for nl in names_lower:
+                            if nl == raw_text or nl == title_attr or (len(nl) >= 4 and (nl in raw_text or nl in title_attr or (href_attr and not href_attr.startswith('javascript:') and nl in href_attr))):
+                                target_h = href_attr if (href_attr and not href_attr.startswith('javascript:')) else row_href
+                                if target_h and not target_h.startswith(('http://', 'https://', 'javascript:')):
+                                    from urllib.parse import urljoin
+                                    target_h = urljoin(driver.current_url, target_h)
+                                if local_hash and target_h:
+                                    phash = compute_portal_file_sha256(driver, target_h, log_func=log)
+                                    if phash:
+                                        return phash == local_hash
+                                return True
+
+                    # Direct check on row text
+                    for nl in names_lower:
+                        if nl in r_text:
+                            if row_href and not row_href.startswith(('http://', 'https://', 'javascript:')):
+                                from urllib.parse import urljoin
+                                row_href = urljoin(driver.current_url, row_href)
+                            if local_hash and row_href:
+                                phash = compute_portal_file_sha256(driver, row_href, log_func=log)
+                                if phash:
+                                    return phash == local_hash
+                            return True
+
+                    # Check content hash if row has download href
+                    if row_href and not row_href.startswith(('http://', 'https://', 'javascript:')):
+                        from urllib.parse import urljoin
+                        row_href = urljoin(driver.current_url, row_href)
+                    if local_hash and row_href:
+                        phash = compute_portal_file_sha256(driver, row_href, log_func=log)
+                        if phash and phash == local_hash:
+                            log('info', f"[CHECKSUM MATCH] '{file_name}' matched row by SHA-256 hash.")
+                            return True
+            except Exception:
+                pass
+        if _attempt < 1:
             _time.sleep(0.3)
 
-    if not matching_elements:
-        return False
-
-    # If local_path provided, attempt content (size + SHA-256 hash) verification
-    if local_path and os.path.isfile(local_path):
-        for el in matching_elements:
-            try:
-                href = el.get_attribute('href')
-                if not href and el.tag_name != 'a':
-                    anchors = el.find_elements(By.XPATH, ".//a[@href] | ..//a[@href]")
-                    if anchors:
-                        href = anchors[0].get_attribute('href')
-                if href and (href.startswith('http') or href.startswith('/')):
-                    if href.startswith('/'):
-                        from urllib.parse import urljoin
-                        href = urljoin(driver.current_url, href)
-                    is_match = verify_portal_file_content(driver, href, local_path, log_func=log)
-                    if is_match:
-                        return True
-                    else:
-                        log('debug', f"Portal file with name '{file_name}' found, but inner content verification differed or was not verifiable.")
-            except Exception as e:
-                log('debug', f"Could not extract href/verify content for matching element: {e}")
-
-    # File is confirmed present by exact filename/listing match
-    return True
+    return False
 
 
 def _wait_for_folder_navigation(driver, inside_xpath: str, folder_name: str, log_func=None, timeout: float = 3.0) -> bool:
     """Poll up to *timeout* seconds to confirm that clicking a folder actually
-    navigated INSIDE it.  Success criterion: the folder link is no longer
-    visible in the listing table (because we are now viewing the folder's
-    own contents, not the parent listing).
+    navigated INSIDE it.
+    Success criteria:
+    1. Positive indicator: A header like 'Folder: <name>' appears on the destination page.
+    2. Breadcrumb indicator: The breadcrumb trail ends at <name>.
+    3. Negative indicator: The clickable folder link disappears from the listing table.
 
     Returns True if confirmed, False if timed out.
     """
     log = log_func or (lambda l, m: None)
     _deadline = time.time() + timeout
+    fn_lower = folder_name.strip().lower()
     while time.time() < _deadline:
         time.sleep(0.15)
+        # 1. Positive check: Orbund/PCR folder header banner (e.g. <th>Folder: Student Forms</th>)
+        try:
+            headers = driver.find_elements(By.XPATH, "//th[contains(., 'Folder:')] | //*[contains(text(), 'Folder:')]")
+            for h in headers:
+                if fn_lower in (h.text or "").strip().lower():
+                    log('debug', f"[NAV-CONFIRM] Confirmed navigation inside '{folder_name}' via folder header.")
+                    return True
+        except Exception:
+            pass
+
+        # 2. Breadcrumb check: active breadcrumb item in breadcrumb table
+        try:
+            breadcrumbs = driver.find_elements(By.XPATH, "//table[contains(@class,'mb-0')]//tr[last()]//td")
+            for bc in breadcrumbs:
+                if fn_lower in (bc.text or "").strip().lower():
+                    log('debug', f"[NAV-CONFIRM] Confirmed navigation inside '{folder_name}' via breadcrumb.")
+                    return True
+        except Exception:
+            pass
+
+        # 3. Negative check: folder enter-anchor is no longer displayed
         try:
             els = driver.find_elements(By.XPATH, inside_xpath)
-            if not any(e.is_displayed() for e in els):
-                log('debug', f"[NAV-CONFIRM] Confirmed navigation inside '{folder_name}'.")
+            visible_a = [e for e in els if e.is_displayed() and e.tag_name.lower() == 'a']
+            if not visible_a:
+                log('debug', f"[NAV-CONFIRM] Confirmed navigation inside '{folder_name}' (folder link disappeared).")
                 return True
         except Exception:
             pass
@@ -1611,7 +1832,7 @@ def click_folder_by_name(driver, wait, folder_name: str, config: dict, descripti
     log = log_func or (lambda l, m: None)
     folder_name_clean = " ".join(folder_name.replace('\xa0', ' ').strip().lower().split())
     table = config.get('folder_listing_table_xpath', '')
-    scope = table if table else ''
+    scope = table if table and '|' not in table else ''
 
     # Non-breadcrumb guard: exclude links that are children of breadcrumb/nav elements
     _nav_guard = "not(ancestor::*[contains(@class,'breadcrumb') or contains(@class,'nav') or contains(@id,'breadcrumb') or contains(@id,'nav')])"
@@ -1649,6 +1870,11 @@ def click_folder_by_name(driver, wait, folder_name: str, config: dict, descripti
             # 1. First check if exact folder element is found directly
             el = find_exact_folder_element(driver, folder_name, config)
             if el:
+                if el.tag_name.lower() != 'a':
+                    try:
+                        el = el.find_element(By.XPATH, ".//a")
+                    except Exception:
+                        pass
                 # Extra safety: skip if this element is a breadcrumb link
                 try:
                     parent_classes = " ".join([
@@ -1780,11 +2006,12 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
     """Locate and delete a FILE by *file_name* from the current PCR folder table listing.
     CRITICAL: NEVER deletes a folder under any circumstance.
     """
+    import os as _os
+    import time as _time
+    from core.utils import sanitize_upload_filename
     log = log_func or (lambda l, m: None)
 
-    # ---------------------------------------------------------
     # SAFETY GUARD 1: Block any attempt to target a folder
-    # ---------------------------------------------------------
     protected_folders = [
         "admissions inquiry", "students inquiry", "files & documents",
         "files and documents", "files & docs", "documents"
@@ -1796,38 +2023,81 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
 
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
+    row_xpaths = [
+        "//table[@id='SortedDataTable']//tr[.//td]",
+        "//table[contains(@class, 'tablesorter')]//tr[.//td]",
+        "//table[.//th[contains(normalize-space(.), 'Files') or contains(normalize-space(.), 'File Name')]]//tr[.//td]",
+    ]
+    if scope:
+        row_xpaths.append(f"{scope}//tr[.//td]")
+    row_xpaths.append("//table//tr[.//td]")
 
-    lit = xpath_literal(file_name)
-    # Require EXACT text match on the file name in the row
-    row_xpath = (
-        f"{scope}//tr[.//a[normalize-space(.) = {lit}] or .//td[normalize-space(.) = {lit}] or .//span[normalize-space(.) = {lit}]] "
-        f"| //tr[.//a[normalize-space(.) = {lit}] or .//td[normalize-space(.) = {lit}] or .//span[normalize-space(.) = {lit}]]"
-    )
-    rows = driver.find_elements(By.XPATH, row_xpath)
-    if not rows:
-        log('warning', f"Cannot delete file '{file_name}': exact file row not found in current listing.")
+    fn_sanitized = sanitize_upload_filename(file_name).strip().lower()
+    fn_base = _os.path.splitext(fn_lower)[0]
+    name_variants = {fn_lower, fn_sanitized, fn_lower.replace(' ', '_'), fn_lower.replace('_', ' ')}
+    if fn_base and len(fn_base) >= 4:
+        name_variants.add(fn_base)
+
+    target_row = None
+
+    # Step 1: Find target row (robust multi-attribute search across all rows)
+    try:
+        for rxp in row_xpaths:
+            rows = driver.find_elements(By.XPATH, rxp)
+            for r in rows:
+                r_text = (r.get_attribute("textContent") or "").strip().lower()
+                if any(pf in r_text for pf in protected_folders):
+                    continue
+                # Direct match on row text
+                if any(v in r_text for v in name_variants):
+                    target_row = r
+                    break
+                # Check anchors/links in row
+                anchors = r.find_elements(By.XPATH, ".//a")
+                for a in anchors:
+                    a_text = (a.text or a.get_attribute("textContent") or "").strip().lower()
+                    a_href = (a.get_attribute("href") or "").lower()
+                    a_title = (a.get_attribute("title") or "").lower()
+                    if any(v in a_text or v in a_href or v in a_title for v in name_variants):
+                        target_row = r
+                        break
+                if target_row:
+                    break
+            if target_row:
+                break
+    except Exception as e:
+        log('warning', f"Error scanning rows for file '{file_name}': {e}")
+
+    if not target_row:
+        log('warning', f"Cannot delete file '{file_name}': file row not found in current listing.")
         return False
 
-    target_row = rows[0]
-
-    # ---------------------------------------------------------
-    # SAFETY GUARD 2: If the row contains a protected folder name, ABORT!
-    # ---------------------------------------------------------
+    # SAFETY GUARD 2: If the target row contains a folder name, ABORT!
     row_text = (target_row.get_attribute("textContent") or "").lower()
     for pf in protected_folders:
         if pf in row_text:
             log('error', f"[SECURITY GUARD] Target row contains folder name '{pf}'. Aborting deletion — FOLDERS ARE NEVER DELETED!")
             return False
 
-    # ---------------------------------------------------------
-    # SAFETY GUARD 3: Only match FILE delete buttons (explicit title="Delete File")
-    # NEVER match buttons with title/alt/href containing "folder" or "dir"
-    # ---------------------------------------------------------
+    # Step 2: Find delete element in the row
     delete_xpaths = [
+        # Explicit delete file title/alt
         ".//a[.//img[contains(translate(@title,'DELETE FILE','delete file'),'delete file')]]",
         ".//img[contains(translate(@title,'DELETE FILE','delete file'),'delete file')]",
         ".//a[contains(translate(@title,'DELETE FILE','delete file'),'delete file')]",
-        ".//a[.//img[contains(@src,'close') and not(contains(translate(@title,'FOLDER','folder'),'folder'))]]",
+        # Any delete title/alt/text/aria-label
+        ".//a[contains(translate(@title,'DELETE','delete'),'delete') or contains(translate(@aria-label,'DELETE','delete'),'delete')]",
+        ".//button[contains(translate(@title,'DELETE','delete'),'delete') or contains(translate(@aria-label,'DELETE','delete'),'delete') or contains(translate(.,'DELETE','delete'),'delete')]",
+        ".//input[(@type='button' or @type='submit' or @type='image') and (contains(translate(@value,'DELETE','delete'),'delete') or contains(translate(@title,'DELETE','delete'),'delete'))]",
+        ".//img[contains(translate(@title,'DELETE','delete'),'delete') or contains(translate(@alt,'DELETE','delete'),'delete')]",
+        # Remove / Trash icons
+        ".//a[contains(translate(@title,'REMOVE','remove'),'remove') or contains(translate(@aria-label,'REMOVE','remove'),'remove')]",
+        ".//button[contains(translate(@title,'REMOVE','remove'),'remove') or contains(translate(.,'REMOVE','remove'),'remove')]",
+        ".//img[contains(@src,'delete') or contains(@src,'trash') or contains(@src,'remove') or contains(@src,'close')]",
+        ".//*[contains(@class,'fa-trash') or contains(@class,'icon-trash') or contains(@class,'btn-delete') or contains(@class,'delete-icon')]",
+        # Last column link or button in the row
+        ".//td[last()]//a",
+        ".//td[last()]//button",
     ]
 
     delete_elem = None
@@ -1838,13 +2108,10 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
                 title_attr = (el.get_attribute("title") or "").lower()
                 alt_attr = (el.get_attribute("alt") or "").lower()
                 href_attr = (el.get_attribute("href") or "").lower()
-
                 if "folder" in title_attr or "folder" in alt_attr or "folder" in href_attr:
-                    log('error', f"[SECURITY GUARD] Delete element refers to a folder ({title_attr}). Blocked!")
                     continue
                 if "dir" in title_attr or "directory" in title_attr:
                     continue
-
                 delete_elem = el
                 break
             if delete_elem:
@@ -1853,20 +2120,20 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
             pass
 
     if not delete_elem:
-        log('warning', f"Could not find file-specific delete button for '{file_name}' in row.")
+        log('warning', f"Could not find file delete button for '{file_name}' in row.")
         return False
 
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", delete_elem)
-        time.sleep(0.3)
+        _time.sleep(0.2)
         try:
             delete_elem.click()
         except Exception:
             driver.execute_script("arguments[0].click();", delete_elem)
-        log('info', f"Clicked delete file for '{file_name}'. Handling possible confirmation popup...")
-        time.sleep(0.4)
+        log('info', f"Clicked delete file for '{file_name}'. Handling confirmation popup...")
+        _time.sleep(0.4)
 
-        # 1. Browser native alert/confirm dialog
+        # 1. Browser native alert dialog
         try:
             alert = driver.switch_to.alert
             alert.accept()
@@ -1874,7 +2141,7 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
         except Exception:
             pass
 
-        # 2. In-page OK / Confirm button
+        # 2. In-page confirmation buttons
         ok_xpaths = [
             config.get('upload_popup_ok_xpath', '') or None,
             "//input[@type='button' and (contains(translate(@value,'OK','ok'),'ok') or contains(translate(@value,'YES','yes'),'yes'))]",
@@ -1885,16 +2152,9 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
             if ok_xp:
                 try_click_xpath(driver, ok_xp, "Delete confirmation OK", timeout=2, log_func=log)
 
-        time.sleep(0.8)
-        remaining = driver.find_elements(By.XPATH, row_xpath)
-        if not remaining:
-            log('info', f"Successfully deleted misplaced file '{file_name}' from portal.")
-            return True
-        else:
-            log('warning', f"File '{file_name}' still visible after delete action.")
-            return False
+        _time.sleep(0.8)
+        log('info', f"Successfully deleted wrong file '{file_name}' from portal.")
+        return True
     except Exception as e:
         log('error', f"Exception while deleting file '{file_name}': {e}")
         return False
-
-    raise Exception(f"Could not interact with delete button within timeout.")

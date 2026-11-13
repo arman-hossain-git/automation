@@ -1,0 +1,79 @@
+{
+  "report_type": "attendance",
+  "document_title": "Attendance",
+  "record_separator": "",
+  "exclude_patterns": [
+    "Page\\s+\\d+\\s+of\\s+\\d+"
+  ],
+  "name_detection": null,
+  "address_block": null,
+  "repeating_sections": [],
+  "summary_fields": [
+    {
+      "name": "instructor",
+      "label": "Instructor",
+      "pattern": "Instructor:[ \\t]*(.+?)(?=[ \\t]+Room:|\\r?\\n|$)",
+      "example_value": "Jelitza Cotto Chinea",
+      "line_idx": 2
+    },
+    {
+      "name": "room",
+      "label": "Room",
+      "pattern": "Jelitza\\ Cotto\\ Chinea\\ Room:[ \\t]*(.+?)(?=[ \\t]+Class\\ Start:|\\r?\\n|$)",
+      "example_value": "Teoria -",
+      "line_idx": 2
+    },
+    {
+      "name": "teoria_class_start",
+      "label": "Teoria Class Start",
+      "pattern": "Teoria\\ Class\\ Start:[ \\t]*(.+?)(?=\\r?\\n|$)",
+      "example_value": "02/18/2020",
+      "line_idx": 2
+    },
+    {
+      "name": "course",
+      "label": "Course",
+      "pattern": "Course:[ \\t]*([A-Za-z0-9\\-]+)(?=[ \\t]+Feb|\\r?\\n|$)",
+      "example_value": "CNT100 Feb 16 - Feb 22",
+      "line_idx": 3
+    },
+    {
+      "name": "term_start",
+      "label": "Term Start",
+      "pattern": "Term\\ Start:[ \\t]*(\\d{2}/\\d{2}/\\d{4})",
+      "example_value": "02/18/2020 16 17 18 19 20 21 22",
+      "line_idx": 5
+    }
+  ],
+  "computed_fields": [],
+  "data_rows": {
+    "pattern": "^([A-Za-z0-9\\-_/]+)\\s+(Bonilla\\ Otero|.+?)\\s+[-]?\\$?\\s*([-\\d,.]+)\\s+([A-Za-z0-9\\-_/]+)$",
+    "columns": [
+      "id",
+      "name",
+      "class_start",
+      "02_18_2020"
+    ]
+  },
+  "output_columns": [
+    "instructor",
+    "room",
+    "teoria_class_start",
+    "course",
+    "term_start",
+    "instructor_jelitza_cotto_chinea",
+    "room_teoria_teoria",
+    "class_start",
+    "02_18_2020",
+    "source_file",
+    "page_number",
+    "name"
+  ],
+  "ml_metadata": {
+    "synthesizer": "dbscan_spatial_ml",
+    "source_sample": "Attendance_Roster--2-18-2020.pdf",
+    "detected_report_type": "attendance",
+    "detected_fields_count": 8,
+    "table_detected": true
+  }
+}

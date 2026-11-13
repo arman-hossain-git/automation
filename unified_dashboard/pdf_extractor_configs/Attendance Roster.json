@@ -1,0 +1,18 @@
+{
+  "report_type": "attendance_roster",
+  "document_title": "Attendance Roster",
+  "record_separator": "Bayamon Community College",
+  "output_columns": [
+    "Instructor",
+    "Room",
+    "Class Start",
+    "Course Code",
+    "Course",
+    "Term Start",
+    "Id",
+    "Name",
+    "Date",
+    "Attended Hours"
+  ]
+}
+

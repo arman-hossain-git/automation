@@ -217,3 +217,4 @@ class FieldUpdaterView(BaseToolWidget):
                 abort_flag=is_aborted,
                 log=_log_adapter,
             )
+

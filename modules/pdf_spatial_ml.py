@@ -31,45 +31,99 @@ def cluster_page_lines(page: pdfplumber.page.Page, eps_y: float = 3.5) -> List[D
     """
     Extracts text lines from page.extract_text() and attaches word tokens with
     their 2D layout geometry (x0, x1, top, bottom, font size).
-    
+
     This guarantees 1-to-1 alignment with ConfigurableExtractor line splitting
     while preserving spatial coordinates for column clustering and field heuristics.
+
+    Words are matched to lines **spatially** (overlapping Y-band) rather than by a
+    global sequential pointer.  The old sequential approach caused permanent
+    coordinate drift whenever a line's whitespace-split token count differed from
+    pdfplumber's word count (ligatures, accented chars, hyphenation, special glyphs),
+    which corrupted every subsequent line's geometry and produced wrong column/regex
+    detection across the entire page.
     """
     raw_lines = (page.extract_text() or "").splitlines()
     all_words = page.extract_words(keep_blank_chars=False, extra_attrs=["size", "fontname"])
-    
+
+    # Sort words by (top, x0) so the Y-band scan is deterministic.
+    sorted_words = sorted(all_words, key=lambda w: (w["top"], w["x0"]))
+
     result = []
-    w_ptr = 0
+    used_indices: set = set()
+
     for l_idx, raw_l in enumerate(raw_lines):
         clean_l = raw_l.strip()
         if not clean_l:
             continue
-        line_tokens = clean_l.split()
-        matched_words = []
-        for token in line_tokens:
-            if w_ptr < len(all_words):
-                matched_words.append(all_words[w_ptr])
-                w_ptr += 1
-        
-        if matched_words:
-            avg_y = float(sum((w["top"] + w["bottom"]) / 2.0 for w in matched_words) / len(matched_words))
-            top_y = float(min(w["top"] for w in matched_words))
-            bot_y = float(max(w["bottom"] for w in matched_words))
+
+        # Rough fallback Y (12 pt ≈ typical body-text leading).
+        fallback_y = float(l_idx * 12.0)
+
+        # ── Pass 1: anchor the Y-band ────────────────────────────────────────
+        # Find the first un-consumed word whose text appears as a substring of
+        # this line so we can derive a reliable band from real coordinates.
+        anchor_top: "Optional[float]" = None
+        anchor_bot: "Optional[float]" = None
+        for wi, w in enumerate(sorted_words):
+            if wi in used_indices:
+                continue
+            if w["text"] and w["text"] in clean_l:
+                anchor_top = w["top"]
+                anchor_bot = w["bottom"]
+                break
+
+        if anchor_top is not None:
+            band_top = anchor_top - eps_y
+            band_bot = anchor_bot + eps_y
         else:
-            avg_y = float(l_idx * 15.0)
-            top_y = avg_y - 5.0
-            bot_y = avg_y + 5.0
+            band_top = fallback_y - 8.0
+            band_bot = fallback_y + 8.0
+
+        # ── Pass 2: collect all un-consumed words whose mid-Y is in the band ─
+        matched_words = []
+        for wi, w in enumerate(sorted_words):
+            if wi in used_indices:
+                continue
+            w_mid = (w["top"] + w["bottom"]) / 2.0
+            if band_top <= w_mid <= band_bot:
+                matched_words.append((wi, w))
+
+        # ── Fallback: sequential grab if spatial matching found nothing ───────
+        # (Rare; happens with unusual encodings where no word text overlaps the line)
+        if not matched_words:
+            n_tokens = len(clean_l.split())
+            for wi, w in enumerate(sorted_words):
+                if wi in used_indices:
+                    continue
+                matched_words.append((wi, w))
+                if len(matched_words) >= n_tokens:
+                    break
+
+        # Mark consumed and sort left-to-right for column detection.
+        word_objs = []
+        for wi, w in matched_words:
+            used_indices.add(wi)
+            word_objs.append(w)
+        word_objs.sort(key=lambda w: w["x0"])
+
+        if word_objs:
+            avg_y = float(sum((w["top"] + w["bottom"]) / 2.0 for w in word_objs) / len(word_objs))
+            top_y = float(min(w["top"] for w in word_objs))
+            bot_y = float(max(w["bottom"] for w in word_objs))
+        else:
+            avg_y = fallback_y
+            top_y = fallback_y - 6.0
+            bot_y = fallback_y + 6.0
 
         result.append({
             "y": avg_y,
             "top": top_y,
             "bottom": bot_y,
             "text": clean_l,
-            "words": matched_words
+            "words": word_objs,
         })
-    
-    return result
 
+    return result
 
 # ---------------------------------------------------------------------------
 # 2. Key-Value Field Detection (Proximity & Anchor Heuristics)
@@ -80,10 +134,12 @@ KNOWN_LABEL_KEYWORDS = [
     "program description", "exp grad date", "student name", "first term", "grad date",
     "drop date", "campus", "status", "group", "session", "ft/pt", "dob", "phone", "term",
     "lda", "id", "student id", "major", "minor", "degree", "credits", "gpa", "cumulative gpa",
+    "program", "exp. grad", "exp grad",
     # Financial & Accounting
     "current balance", "total credit", "total debit", "ending balance", "subtotal", "total",
     "tax", "amount due", "balance due", "invoice date", "due date", "bill to", "ship to",
     "invoice number", "invoice #", "po number", "payment terms", "account number",
+    "projected balance", "total estimated disbursements", "estimated program cost", "estimated cost of attendance",
     # Resume & HR
     "candidate name", "full name", "email", "phone number", "mobile", "address", "location",
     "linkedin", "github", "portfolio", "objective", "summary", "experience", "education",
@@ -92,7 +148,6 @@ KNOWN_LABEL_KEYWORDS = [
     "course", "subject", "class", "instructor", "teacher", "trainer", "date", "room",
     "period", "time", "total present", "total absent", "total hours", "attendance",
 ]
-
 
 def _find_labels_in_line(text: str) -> List[Tuple[str, int, int]]:
     """
@@ -173,33 +228,37 @@ def detect_key_value_fields(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
         if not lbls:
             # Check for financial totals line e.g. "$ 0.00 $ 7,593.75 $ -7,593.75"
-            fin_match = re.search(r"^\s*([-]?\$?\s*[\d,.]+)\s+([-]?\$?\s*[\d,.]+)\s+([-]?\$?\s*[\d,.]+)$", text)
-            if fin_match and "total_debit" not in seen_names:
-                detected.append({
-                    "name": "total_debit",
-                    "label": "Total Debit",
-                    "pattern": r"^\s*[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*[-\d,.]+$",
-                    "example_value": fin_match.group(1),
-                    "line_idx": l_idx,
-                    "flags": "MULTILINE"
-                })
-                detected.append({
-                    "name": "total_credit",
-                    "label": "Total Credit",
-                    "pattern": r"^\s*[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*[-\d,.]+$",
-                    "example_value": fin_match.group(2),
-                    "line_idx": l_idx,
-                    "flags": "MULTILINE"
-                })
-                detected.append({
-                    "name": "ending_balance",
-                    "label": "Ending Balance",
-                    "pattern": r"^\s*[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*([-\d,.]+)$",
-                    "example_value": fin_match.group(3),
-                    "line_idx": l_idx,
-                    "flags": "MULTILINE"
-                })
-                seen_names.update(["total_debit", "total_credit", "ending_balance"])
+            # Require "$" so text lines with numbers or period ranges (e.g. 481.000 - 960.000) are never misidentified
+            if "$" in text:
+                fin_match = re.search(r"^\s*([-]?\$\s*[\d,]+(?:\.\d{2})?)\s+([-]?\$\s*[\d,]+(?:\.\d{2})?)\s+([-]?\$\s*[\d,]+(?:\.\d{2})?)$", text)
+                if not fin_match:
+                    fin_match = re.search(r"^\s*([-]?\$?\s*[\d,]+\.\d{2})\s+([-]?\$?\s*[\d,]+\.\d{2})\s+([-]?\$?\s*[\d,]+\.\d{2})$", text)
+                if fin_match and "total_debit" not in seen_names:
+                    detected.append({
+                        "name": "total_debit",
+                        "label": "Total Debit",
+                        "pattern": r"^\s*[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*[-\d,.]+$",
+                        "example_value": fin_match.group(1),
+                        "line_idx": l_idx,
+                        "flags": "MULTILINE"
+                    })
+                    detected.append({
+                        "name": "total_credit",
+                        "label": "Total Credit",
+                        "pattern": r"^\s*[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*[-\d,.]+$",
+                        "example_value": fin_match.group(2),
+                        "line_idx": l_idx,
+                        "flags": "MULTILINE"
+                    })
+                    detected.append({
+                        "name": "ending_balance",
+                        "label": "Ending Balance",
+                        "pattern": r"^\s*[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*([-\d,.]+)$",
+                        "example_value": fin_match.group(3),
+                        "line_idx": l_idx,
+                        "flags": "MULTILINE"
+                    })
+                    seen_names.update(["total_debit", "total_credit", "ending_balance"])
             continue
 
         _OTHER_LABEL_RE = re.compile(r"^(?:Drop Date|Group|Status|Exp Grad Date|Grad Date|Session|FT/PT|Campus|LDA|First Term|Trans Date)\s*:")
@@ -573,7 +632,7 @@ def detect_separator_and_excludes(pdf_path: str, max_pages: int = 4, doc_type: s
                     record_separator = sep_match.group(1).strip()
                     name_detection = {
                         "output_column": "student_name",
-                        "pattern": rf"^(?:{re.escape(record_separator)}\s*)?[-–]\s*(.+)$",
+                        "pattern": rf"^\s*(?:{re.escape(record_separator)}\s*)?[-–]\s*(.+)$",
                         "stop_at": ""
                     }
                     break
@@ -698,6 +757,13 @@ def classify_document(pdf_path: str, max_pages: int = 3) -> Tuple[str, str, str]
     ):
         return "student_ledger", "Student Ledger", inst_name
 
+    # 4. Balance Sheet
+    if (
+        re.search(r"\bBalance\s+Sheet\b", full_sample, re.IGNORECASE)
+        and re.search(r"\b(?:Estimated\s+Fees|Estimated\s+Disbursements|Projected\s+Balance|Estimated\s+Program\s+Cost|Estimated\s+Cost\s+of\s+Attendance)\b", full_sample, re.IGNORECASE)
+    ):
+        return "balance_sheet", "Balance Sheet", inst_name or "Bayamon Community College"
+
     # 4. Resume / CV
     if (
         re.search(r"\b(?:Resume|Curriculum\s+Vitae|C\.?V\.?)\b", full_sample, re.IGNORECASE)
@@ -746,6 +812,7 @@ def classify_document(pdf_path: str, max_pages: int = 3) -> Tuple[str, str, str]
 
 def _build_schedule_preset(pdf_path: str, lines: List[Dict[str, Any]], institution_sep: str) -> Dict[str, Any]:
     """Preset configuration for Student Schedules."""
+    other_labels = r"Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date"
     return {
         "report_type": "student_schedule",
         "document_title": "Student Schedule",
@@ -765,14 +832,14 @@ def _build_schedule_preset(pdf_path: str, lines: List[Dict[str, Any]], instituti
         "address_block": None,
         "repeating_sections": [],
         "summary_fields": [
-            {"name": "program_description", "pattern": r"Program Description:\s*(.+?)(?:\s+Drop Date:|\s+Group:|\r?\n|$)"},
-            {"name": "program_description_continuation", "pattern": r"Program Description:[^\n\r]*\r?\n(?:[ \t]*https?://\S+[ \t]*\r?\n)?(?!\s*(?:Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date))[ \t]*([^\n\r]+)"},
+            {"name": "program_description", "pattern": rf"Program Description:[ \t]*(?!\s*(?:{other_labels}))(.+?)(?=[ \t]+(?:{other_labels})|[ \t]*\r?\n|$)"},
+            {"name": "program_description_continuation", "pattern": rf"Program Description:[^\n\r]*\r?\n(?:[ \t]*https?://\S+[ \t]*\r?\n)?(?!\s*(?:{other_labels}))[ \t]*(?:https?://\S+[ \t]*)?([^\n\r]+)"},
             {"name": "drop_date", "pattern": r"Drop Date:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "group", "pattern": r"Group:\s*(\S+)"},
             {"name": "first_term", "pattern": r"First Term:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "exp_grad_date", "pattern": r"Exp Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "ft_pt", "pattern": r"FT/PT:\s*(Full Time|Part Time|\S+)"},
-            {"name": "status", "pattern": r"Status:\s*(Active|Graduated|Dropped|Withdrawn|Inactive|Leave\s+of\s+Absence|Probation|[A-Za-z]+)(?=\s+(?:Exp\s+Grad\s+Date|Grad\s+Date|Session|FT/PT|First\s+Term):|\s+|$)"},
+            {"name": "status", "pattern": r"Status:\s*([A-Za-z\s/]+?)(?=\s+(?:Exp\s+Grad\s+Date|Grad\s+Date|Session|FT/PT|First\s+Term):|\s*\r?\n|$)"},
             {"name": "grad_date", "pattern": r"(?<!Exp )Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "session", "pattern": r"Session:\s*([A-Za-z0-9\-]+)"},
             {"name": "term", "pattern": r"Term:\s*(\d{2}/\d{2}/\d{4}(?:\s*-\s*\d{2}/\d{2}/\d{4})?)"},
@@ -813,6 +880,7 @@ def _build_schedule_preset(pdf_path: str, lines: List[Dict[str, Any]], instituti
 def _build_transcript_preset(pdf_path: str, lines: List[Dict[str, Any]], institution_sep: str) -> Dict[str, Any]:
     """Preset configuration for Student Transcripts."""
     sep = institution_sep or "Bayamon Community College"
+    other_labels = r"Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date"
     return {
         "report_type": "student_transcript",
         "document_title": "Student Transcript",
@@ -844,7 +912,7 @@ def _build_transcript_preset(pdf_path: str, lines: List[Dict[str, Any]], institu
                 "name": "program",
                 "marker": "Program Description:",
                 "marker_line_fields": [
-                    {"name": "program_description", "pattern": r"Program Description:\s*(.+?)(?:\s+Drop Date:|\s+Group:|\r?\n|$)"},
+                    {"name": "program_description", "pattern": rf"Program Description:[ \t]*(?!\s*(?:{other_labels}))(.+?)(?=[ \t]+(?:{other_labels})|[ \t]*\r?\n|$)"},
                     {"name": "drop_date", "pattern": r"Drop Date:\s*(\d{2}/\d{2}/\d{4})"},
                     {"name": "group", "pattern": r"Group:\s*(\S+)"}
                 ],
@@ -852,7 +920,7 @@ def _build_transcript_preset(pdf_path: str, lines: List[Dict[str, Any]], institu
                     {"name": "first_term", "pattern": r"First Term:\s*(\d{2}/\d{2}/\d{4})"},
                     {"name": "exp_grad_date", "pattern": r"Exp Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
                     {"name": "ft_pt", "pattern": r"FT/PT:\s*(Full Time|Part Time|\S+)"},
-                    {"name": "status", "pattern": r"Status:\s*([A-Za-z\s]+?)(?=\s+Exp Grad Date:|\s+Grad Date:|\s+FT/PT:|\s+First Term:|\s*$)"},
+                    {"name": "status", "pattern": r"Status:\s*([A-Za-z\s/]+?)(?=\s+Exp Grad Date:|\s+Grad Date:|\s+FT/PT:|\s+First Term:|\s*\r?\n|$)"},
                     {"name": "lda", "pattern": r"LDA:\s*(\d{2}/\d{2}/\d{4})"},
                     {"name": "grad_date", "pattern": r"(?<!Exp )Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
                     {"name": "session", "pattern": r"Session:\s*([A-Za-z0-9\-]+)"}
@@ -862,11 +930,12 @@ def _build_transcript_preset(pdf_path: str, lines: List[Dict[str, Any]], institu
         "summary_fields": [
             {"name": "id", "pattern": r"(?:ID|Id):\s*([A-Za-z0-9\-]+)"},
             {"name": "dob", "pattern": r"DOB:\s*(\d{2}/\d{2}/\d{4})"},
-            {"name": "phone", "pattern": r"Phone:\s*([0-9\-\(\)\s]+?)(?=\s+Campus:|\s+Status:|\s+Drop Date:|\s*$)"},
-            {"name": "program_description", "pattern": r"Program Description:\s*(.+?)(?:\s+Drop Date:|\s+Group:|\r?\n|$)"},
+            {"name": "phone", "pattern": r"Phone:\s*([0-9\-\(\)\s]+?)(?=\s+Campus:|\s+Status:|\s+Drop Date:|\s*\r?\n|$)"},
+            {"name": "program_description", "pattern": rf"Program Description:[ \t]*(?!\s*(?:{other_labels}))(.+?)(?=[ \t]+(?:{other_labels})|[ \t]*\r?\n|$)"},
+            {"name": "program_description_continuation", "pattern": rf"Program Description:[^\n\r]*\r?\n(?:[ \t]*https?://\S+[ \t]*\r?\n)?(?!\s*(?:{other_labels}))[ \t]*(?:https?://\S+[ \t]*)?([^\n\r]+)"},
             {"name": "drop_date", "pattern": r"Drop Date:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "group", "pattern": r"Group:\s*(\S+)"},
-            {"name": "status", "pattern": r"Status:\s*([A-Za-z\s]+?)(?=\s+Exp Grad Date:|\s+Grad Date:|\s+FT/PT:|\s+First Term:|\s*$)"},
+            {"name": "status", "pattern": r"Status:\s*([A-Za-z\s/]+?)(?=\s+Exp Grad Date:|\s+Grad Date:|\s+FT/PT:|\s+First Term:|\s*\r?\n|$)"},
             {"name": "exp_grad_date", "pattern": r"Exp Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "ft_pt", "pattern": r"FT/PT:\s*(Full Time|Part Time|\S+)"},
             {"name": "first_term", "pattern": r"First Term:\s*(\d{2}/\d{2}/\d{4})"},
@@ -874,7 +943,9 @@ def _build_transcript_preset(pdf_path: str, lines: List[Dict[str, Any]], institu
             {"name": "grad_date", "pattern": r"(?<!Exp )Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
             {"name": "session", "pattern": r"Session:\s*([A-Za-z0-9\-]+)"}
         ],
-        "computed_fields": [],
+        "computed_fields": [
+            {"name": "program", "join": ["program_description", "program_description_continuation"], "sep": " "}
+        ],
         "data_rows": {
             "pattern": r"^([A-Z]{2,4}\d{3,4}[A-Z]?)\s+(.+?)\s+([A-Z0-9+\-]+|-)\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s*$",
             "columns": ["course", "course_description", "grade", "units_attempted", "units_completed"]
@@ -897,6 +968,56 @@ def _build_transcript_preset(pdf_path: str, lines: List[Dict[str, Any]], institu
 
 def _build_ledger_preset(pdf_path: str, lines: List[Dict[str, Any]], institution_sep: str) -> Dict[str, Any]:
     """Preset configuration for Student Ledgers / Financial Statements."""
+    sample_text = "\n".join(l.get("text", "") for l in lines)
+    is_kwi = bool(
+        "KENTUCKY WELDING INSTITUTE" in sample_text.upper()
+        or "KWI" in (institution_sep or "").upper()
+        or re.search(r"Student Ledger\s*[-–]\s*[A-Za-z]+", sample_text)
+    )
+
+    if is_kwi:
+        return {
+            "report_type": "kwi_student_ledger",
+            "document_title": "Student Ledger",
+            "record_separator": "",
+            "exclude_patterns": [
+                r"Page\s+\d+\s+of\s+\d+",
+                r"^\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}",
+                r"^1828 Maysville",
+                r"^Phone:",
+                r"^https?://",
+            ],
+            "name_detection": {
+                "output_column": "student_name",
+                "pattern": r"^Student Ledger\s*[-–]\s*(.+)$",
+                "stop_at": ""
+            },
+            "address_block": None,
+            "repeating_sections": [],
+            "summary_fields": [
+                {"name": "current_balance", "pattern": r"Current Balance:[ \t]*(-?\$?[\d,.]+)"},
+                {"name": "generated_date", "pattern": r"Generated:[ \t]*(\d{2}/\d{2}/\d{4})"}
+            ],
+            "computed_fields": [],
+            "data_rows": {
+                "mode": "student_ledger",
+                "columns": ["date", "code", "description", "program", "payment_period", "notes", "amount"]
+            },
+            "output_columns": [
+                "student_name", "current_balance", "generated_date",
+                "date", "code", "description", "program", "payment_period", "notes", "amount",
+                "source_file", "page_number"
+            ],
+            "ml_metadata": {
+                "synthesizer": "dbscan_spatial_ml",
+                "source_sample": os.path.basename(pdf_path),
+                "detected_report_type": "kwi_student_ledger",
+                "detected_fields_count": 2,
+                "table_detected": True
+            }
+        }
+
+    other_labels = r"Status:|First Term:|Drop Date:|Group:|Exp Grad Date:|Grad Date:|Session:|FT/PT:|Campus:|LDA:|Trans Date|Date"
     return {
         "report_type": "student_ledger",
         "document_title": "Student Ledger",
@@ -916,39 +1037,100 @@ def _build_ledger_preset(pdf_path: str, lines: List[Dict[str, Any]], institution
         "address_block": None,
         "repeating_sections": [],
         "summary_fields": [
-            {"name": "program_description", "pattern": r"Program Description:\s*(.+?)(?:\s+Drop Date:|\s+Group:|\r?\n|$)"},
-            {"name": "campus", "pattern": r"Campus:\s*([A-Za-z0-9\s]+?)(?=\s+Drop Date:|\s+Status:|\s*$)"},
-            {"name": "status", "pattern": r"Status:\s*([A-Za-z\s]+?)(?=\s+Exp Grad Date:|\s+FT/PT:|\s*$)"},
-            {"name": "exp_grad_date", "pattern": r"Exp Grad Date:\s*(\d{2}/\d{2}/\d{4})"},
-            {"name": "ft_pt", "pattern": r"FT/PT:\s*(Full Time|Part Time|\S+)"},
-            {"name": "first_term", "pattern": r"First Term:\s*(\d{2}/\d{2}/\d{4})"},
-            {"name": "lda", "pattern": r"LDA:\s*(\d{2}/\d{2}/\d{4})"},
-            {"name": "session", "pattern": r"Session:\s*([A-Za-z0-9\-]+)"},
+            {"name": "program_description", "pattern": rf"Program Description:[ \t]*(?!\s*(?:{other_labels}))(.+?)(?=[ \t]+(?:{other_labels})|[ \t]*\r?\n|$)"},
+            {"name": "program_description_continuation", "pattern": rf"Program Description:[^\n\r]*\r?\n(?:[ \t]*https?://\S+[ \t]*\r?\n)?(?!\s*(?:{other_labels}))[ \t]*(?:https?://\S+[ \t]*)?([^\n\r]+)"},
+            {"name": "campus", "pattern": r"Campus:[ \t]*([A-Za-z0-9\s]+?)(?=[ \t]+(?:Drop Date:|Status:|Exp Grad Date:)|[ \t]*\r?\n|$)"},
+            {"name": "status", "pattern": r"Status:[ \t]*([A-Za-z\s/]+?)(?=[ \t]+(?:Exp Grad Date:|Grad Date:|FT/PT:|First Term:|Session:)|[ \t]*\r?\n|$)"},
+            {"name": "drop_date", "pattern": r"Drop Date:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "group", "pattern": r"Group:[ \t]*(\S+)"},
+            {"name": "exp_grad_date", "pattern": r"Exp Grad Date:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "ft_pt", "pattern": r"FT/PT:[ \t]*(Full Time|Part Time|\S+)"},
+            {"name": "first_term", "pattern": r"First Term:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "lda", "pattern": r"LDA:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "grad_date", "pattern": r"(?<!Exp )Grad Date:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "session", "pattern": r"Session:[ \t]*([A-Za-z0-9\-]+)"},
             {"name": "total_debit", "pattern": r"^\s*[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*[-\d,.]+$", "flags": "MULTILINE"},
             {"name": "total_credit", "pattern": r"^\s*[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*[-\d,.]+$", "flags": "MULTILINE"},
             {"name": "ending_balance", "pattern": r"^\s*[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*[-\d,.]+\s+[-]?\$?\s*([-\d,.]+)$", "flags": "MULTILINE"}
         ],
-        "computed_fields": [],
+        "computed_fields": [
+            {"name": "program", "join": ["program_description", "program_description_continuation"], "sep": " "}
+        ],
         "data_rows": {
-            "mode": "student_ledger",
-            "pattern": r"^(\d{2}/\d{2}/\d{4})\s+([A-Za-z0-9\-]+)\s+(.+?)\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*([-\d,.]+)$",
-            "columns": ["trans_date", "ledger_code", "description", "receipt_check", "debit", "credit", "balance"]
+            "pattern": r"^(\d{2}/\d{2}/\d{4})\s+([A-Za-z0-9\-]+(?:\s+\d{2}[/-]\d{2})?)\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*([-\d,.]+)\s+[-]?\$?\s*([-\d,.]+)$",
+            "columns": ["trans_date", "ledger_code", "debit", "credit", "balance"]
         },
         "output_columns": [
-            "student_name", "program_description", "campus", "status", "exp_grad_date", "ft_pt",
-            "first_term", "lda", "session", "trans_date", "ledger_code", "description",
-            "receipt_check", "debit", "credit", "balance", "total_debit", "total_credit", "ending_balance",
+            "student_name", "program", "campus", "status", "drop_date", "group", "exp_grad_date",
+            "ft_pt", "first_term", "lda", "session", "trans_date", "ledger_code", "debit",
+            "credit", "balance", "total_debit", "total_credit", "ending_balance",
             "source_file", "page_number"
         ],
         "ml_metadata": {
             "synthesizer": "dbscan_spatial_ml",
             "source_sample": os.path.basename(pdf_path),
             "detected_report_type": "student_ledger",
-            "detected_fields_count": 11,
+            "detected_fields_count": 14,
             "table_detected": True
         }
     }
 
+
+def _build_balance_sheet_preset(pdf_path: str, lines: List[Dict[str, Any]], institution_sep: str) -> Dict[str, Any]:
+    """Preset configuration for Student Balance Sheets / Financial Aid Projections."""
+    sep = institution_sep or "Bayamon Community College"
+    return {
+        "report_type": "balance_sheet",
+        "document_title": "Balance Sheet",
+        "record_separator": sep,
+        "exclude_patterns": [
+            r"Page\s+\d+\s+of\s+\d+",
+            r"Powered by TCPDF.*",
+            r"https?://\S+",
+            r"^\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}",
+            r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),.*Page\s+\d+",
+            r"^Estimated Fees",
+            r"^Estimated Disbursements",
+        ],
+        "name_detection": {
+            "output_column": "student_name",
+            "pattern": r"^([A-Za-z\u00C0-\u00FF\s'.-]+,\s*[A-Za-z\u00C0-\u00FF\s'.-]+)$",
+            "stop_at": ""
+        },
+        "address_block": None,
+        "repeating_sections": [],
+        "summary_fields": [
+            {"name": "campus", "pattern": r"Campus:[ \t]*([A-Za-z0-9\s]+?)(?=[ \t]*\r?\n|$)"},
+            {"name": "program", "pattern": r"Program:[ \t]*(.+?)(?=[ \t]*\r?\n|$)"},
+            {"name": "id", "pattern": r"ID:[ \t]*([A-Za-z0-9\-]+)"},
+            {"name": "status", "pattern": r"Status:[ \t]*([A-Za-z\s/]+?)(?=\s+(?:PO\s+Box|Po\s+Box|hc\s+|Calle|Urb|\d|[A-Z]{2}\b)|\r?\n|$)"},
+            {"name": "dob", "pattern": r"DOB:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "first_term", "pattern": r"First Term:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "phone", "pattern": r"Phone:[ \t]*([0-9\-\(\)\s]+?)(?=\s+Exp|\r?\n|$)"},
+            {"name": "exp_grad", "pattern": r"Exp\.?\s*Grad:[ \t]*(\d{2}/\d{2}/\d{4})"},
+            {"name": "estimated_program_cost", "pattern": r"Estimated Program Cost.*?([-]?\$?\s*[\d,]+\.\d{2})\s*$", "flags": "MULTILINE"},
+            {"name": "estimated_cost_of_attendance", "pattern": r"Estimated Cost of Attendance.*?([-]?\$?\s*[\d,]+\.\d{2})\s*$", "flags": "MULTILINE"},
+            {"name": "total_estimated_disbursements", "pattern": r"Total Estimated Disbursements.*?([-]?\$?\s*[\d,]+\.\d{2})\s*$", "flags": "MULTILINE"},
+            {"name": "projected_balance", "pattern": r"Projected Balance.*?([-]?\$?\s*[\d,]+\.\d{2})\s*$", "flags": "MULTILINE"},
+        ],
+        "computed_fields": [],
+        "data_rows": {
+            "pattern": r"^(?!(?:Estimated\s+(?:Program|Cost)|Total\s+Estimated|Projected\s+Balance))([A-Za-z0-9].+?)\s+[-]?\$\s*[\d,.]+(?:\s+[-]?\$\s*[\d,.]+)*\s+([-]?\$\s*[\d,.]+)$",
+            "columns": ["item_description", "total_amount"]
+        },
+        "output_columns": [
+            "student_name", "id", "program", "campus", "status", "dob", "first_term", "exp_grad", "phone",
+            "estimated_program_cost", "estimated_cost_of_attendance", "total_estimated_disbursements", "projected_balance",
+            "item_description", "total_amount", "source_file", "page_number"
+        ],
+        "ml_metadata": {
+            "synthesizer": "dbscan_spatial_ml",
+            "source_sample": os.path.basename(pdf_path),
+            "detected_report_type": "balance_sheet",
+            "detected_fields_count": 12,
+            "table_detected": True
+        }
+    }
 
 def _build_resume_preset(pdf_path: str, lines: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Preset configuration for Resumes & CVs."""
@@ -997,6 +1179,33 @@ def _build_resume_preset(pdf_path: str, lines: List[Dict[str, Any]]) -> Dict[str
 
 def _build_attendance_preset(pdf_path: str, lines: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Preset configuration for Attendance sheets & rosters."""
+    sample_text = " ".join([l.get("text", "") for l in lines[:30]])
+    if re.search(r"attendance\s+roster", sample_text, re.IGNORECASE) and re.search(r"instructor:", sample_text, re.IGNORECASE):
+        return {
+            "report_type": "attendance_roster",
+            "document_title": "Attendance Roster",
+            "record_separator": "Bayamon Community College",
+            "output_columns": [
+                "Instructor",
+                "Room",
+                "Class Start",
+                "Course Code",
+                "Course",
+                "Term Start",
+                "Id",
+                "Name",
+                "Date",
+                "Attended Hours"
+            ],
+            "ml_metadata": {
+                "synthesizer": "dbscan_spatial_ml",
+                "source_sample": os.path.basename(pdf_path),
+                "detected_report_type": "attendance_roster",
+                "detected_fields_count": 10,
+                "table_detected": True
+            }
+        }
+
     summary_fields = detect_key_value_fields(lines)
     table_info = detect_table_structure(lines)
 
@@ -1180,6 +1389,8 @@ def synthesize_preset_from_pdf(pdf_path: str, preset_name: Optional[str] = None)
         return _build_transcript_preset(pdf_path, lines, inst_name)
     elif doc_type == "student_ledger":
         return _build_ledger_preset(pdf_path, lines, inst_name)
+    elif doc_type == "balance_sheet":
+        return _build_balance_sheet_preset(pdf_path, lines, inst_name)
     elif doc_type == "resume":
         return _build_resume_preset(pdf_path, lines)
     elif doc_type == "attendance":

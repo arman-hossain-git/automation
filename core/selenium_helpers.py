@@ -1525,9 +1525,51 @@ def folder_exists_in_listing(driver, folder_name: str, config: dict) -> bool:
     return False
 
 
-def compute_portal_file_sha256(driver, download_url: str, log_func=None) -> str | None:
+def get_portal_requests_session(driver) -> "requests.Session":
+    """Build a requests.Session initialized with active Selenium cookies, User-Agent,
+    and HTTP connection pooling (Keep-Alive). Reusing this session across multiple file
+    downloads eliminates redundant TCP handshakes and SSL/TLS negotiations.
+    """
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=15,
+        pool_maxsize=15,
+        max_retries=Retry(total=2, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    try:
+        for cookie in driver.get_cookies():
+            session.cookies.set(cookie['name'], cookie['value'])
+    except Exception:
+        pass
+
+    try:
+        ua = driver.execute_script("return navigator.userAgent;")
+        if ua:
+            session.headers.update({"User-Agent": ua})
+    except Exception:
+        pass
+
+    try:
+        if driver.current_url:
+            session.headers.update({"Referer": driver.current_url})
+    except Exception:
+        pass
+
+    return session
+
+
+def compute_portal_file_sha256(driver, download_url: str, session=None, log_func=None) -> str | None:
     """Download a file from *download_url* in-memory using active Selenium session cookies and headers,
     and return its SHA-256 hex digest. Returns None if download fails.
+    If *session* is provided, reuses that persistent requests.Session to avoid re-authenticating and
+    re-handshaking TLS.
     """
     if not download_url:
         return None
@@ -1539,38 +1581,93 @@ def compute_portal_file_sha256(driver, download_url: str, log_func=None) -> str 
         if download_url.startswith('/'):
             download_url = urljoin(driver.current_url, download_url)
 
-        session = requests.Session()
-        for cookie in driver.get_cookies():
-            session.cookies.set(cookie['name'], cookie['value'])
+        close_session_when_done = False
+        if session is None:
+            session = get_portal_requests_session(driver)
+            close_session_when_done = True
 
         try:
-            ua = driver.execute_script("return navigator.userAgent;")
-            if ua:
-                session.headers.update({"User-Agent": ua})
-        except Exception:
-            pass
+            r = session.get(download_url, timeout=15, stream=True)
+            if r.status_code != 200:
+                if log_func:
+                    log_func('debug', f"Failed to download portal file (HTTP {r.status_code}): {download_url}")
+                return None
 
-        if driver.current_url:
-            session.headers.update({"Referer": driver.current_url})
-
-        r = session.get(download_url, timeout=12, stream=True)
-        if r.status_code != 200:
-            if log_func:
-                log_func('debug', f"Failed to download portal file (HTTP {r.status_code}): {download_url}")
-            return None
-
-        h = hashlib.sha256()
-        for chunk in r.iter_content(chunk_size=32768):
-            if chunk:
-                h.update(chunk)
-        return h.hexdigest()
+            h = hashlib.sha256()
+            for chunk in r.iter_content(chunk_size=65536):
+                if chunk:
+                    h.update(chunk)
+            return h.hexdigest()
+        finally:
+            if close_session_when_done:
+                session.close()
     except Exception as e:
         if log_func:
             log_func('debug', f"Error computing SHA-256 for portal URL '{download_url}': {e}")
         return None
 
 
-def verify_portal_file_content(driver, download_url: str, local_filepath: str, log_func=None) -> bool:
+def compute_portal_folder_sha256_batch(
+    driver,
+    portal_files: list[dict],
+    session=None,
+    max_workers: int = 6,
+    log_func=None
+) -> dict[str, str]:
+    """Download and compute SHA-256 digests for all files in *portal_files*
+    in parallel using a pooled requests.Session and ThreadPoolExecutor.
+
+    Returns a dict mapping download_url (href) -> SHA-256 hex digest.
+    Every byte of every file is hashed using hashlib.sha256() without compromise.
+    """
+    if not portal_files:
+        return {}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from urllib.parse import urljoin
+
+    urls_to_fetch = set()
+    for pf in portal_files:
+        href = pf.get('href', '').strip()
+        if href and not href.startswith('javascript:'):
+            if href.startswith('/'):
+                href = urljoin(driver.current_url, href)
+            urls_to_fetch.add(href)
+
+    if not urls_to_fetch:
+        return {}
+
+    close_session_when_done = False
+    if session is None:
+        session = get_portal_requests_session(driver)
+        close_session_when_done = True
+
+    results = {}
+    workers = min(max_workers, len(urls_to_fetch))
+
+    def _fetch_hash(url):
+        h_val = compute_portal_file_sha256(driver, url, session=session, log_func=log_func)
+        return url, h_val
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_url = {executor.submit(_fetch_hash, u): u for u in urls_to_fetch}
+            for future in as_completed(future_to_url):
+                try:
+                    url, h_val = future.result()
+                    if h_val:
+                        results[url] = h_val
+                except Exception as e:
+                    if log_func:
+                        log_func('debug', f"Batch SHA-256 calculation error for {future_to_url[future]}: {e}")
+    finally:
+        if close_session_when_done:
+            session.close()
+
+    return results
+
+
+def verify_portal_file_content(driver, download_url: str, local_filepath: str, session=None, log_func=None) -> bool:
     """Download a file from *download_url* using active Selenium session cookies
     and compare its file size and SHA-256 hash against *local_filepath*.
 
@@ -1585,7 +1682,7 @@ def verify_portal_file_content(driver, download_url: str, local_filepath: str, l
         from core.utils import compute_file_sha256
 
         local_hash = compute_file_sha256(local_filepath)
-        portal_hash = compute_portal_file_sha256(driver, download_url, log_func=log)
+        portal_hash = compute_portal_file_sha256(driver, download_url, session=session, log_func=log)
         if not portal_hash:
             return False
 
@@ -1607,6 +1704,8 @@ def file_exists_in_listing(
     upload_name: str | None = None,
     local_path: str | None = None,
     table_snapshot: dict | None = None,
+    portal_file_hashes: dict | None = None,
+    session=None,
     log_func=None
 ) -> bool:
     """Check whether *file_name* (or *upload_name*) already appears in the CURRENT folder's
@@ -1615,6 +1714,7 @@ def file_exists_in_listing(
     Checks table snapshot (if supplied) and falls back to live DOM rows, matching against
     case-insensitive, sanitized, space/underscore, and extension-stripped variations.
     If *local_path* is provided and an entry has a download link, also verifies content SHA-256 hash.
+    Reuses *portal_file_hashes* and *session* if provided for fast, pooled verification.
     """
     import os as _os
     import time as _time
@@ -1628,6 +1728,16 @@ def file_exists_in_listing(
             local_hash = compute_file_sha256(local_path)
         except Exception:
             pass
+
+    def _lookup_phash(href_url: str) -> str | None:
+        if not href_url:
+            return None
+        if portal_file_hashes and href_url in portal_file_hashes:
+            return portal_file_hashes[href_url]
+        val = compute_portal_file_sha256(driver, href_url, session=session, log_func=log)
+        if portal_file_hashes is not None and val:
+            portal_file_hashes[href_url] = val
+        return val
 
     names_to_check = [file_name]
     if upload_name and upload_name != file_name:
@@ -1658,7 +1768,7 @@ def file_exists_in_listing(
             if nl in by_name:
                 entry = by_name[nl]
                 if local_hash and entry.get('href'):
-                    phash = compute_portal_file_sha256(driver, entry['href'], log_func=log)
+                    phash = _lookup_phash(entry['href'])
                     if phash:
                         return phash == local_hash
                 return True
@@ -1666,7 +1776,7 @@ def file_exists_in_listing(
                 if nl == bn or (len(nl) >= 4 and nl in bn):
                     entry = by_name[bn]
                     if local_hash and entry.get('href'):
-                        phash = compute_portal_file_sha256(driver, entry['href'], log_func=log)
+                        phash = _lookup_phash(entry['href'])
                         if phash:
                             return phash == local_hash
                     return True
@@ -1676,7 +1786,7 @@ def file_exists_in_listing(
             for f in table_snapshot.get('files', []):
                 href = f.get('href')
                 if href:
-                    phash = compute_portal_file_sha256(driver, href, log_func=log)
+                    phash = _lookup_phash(href)
                     if phash and phash == local_hash:
                         log('info', f"[CHECKSUM MATCH] '{file_name}' matched existing portal file '{f.get('name')}' by SHA-256 hash.")
                         return True
@@ -1734,7 +1844,7 @@ def file_exists_in_listing(
                                     from urllib.parse import urljoin
                                     target_h = urljoin(driver.current_url, target_h)
                                 if local_hash and target_h:
-                                    phash = compute_portal_file_sha256(driver, target_h, log_func=log)
+                                    phash = _lookup_phash(target_h)
                                     if phash:
                                         return phash == local_hash
                                 return True
@@ -1746,7 +1856,7 @@ def file_exists_in_listing(
                                 from urllib.parse import urljoin
                                 row_href = urljoin(driver.current_url, row_href)
                             if local_hash and row_href:
-                                phash = compute_portal_file_sha256(driver, row_href, log_func=log)
+                                phash = _lookup_phash(row_href)
                                 if phash:
                                     return phash == local_hash
                             return True
@@ -1756,7 +1866,7 @@ def file_exists_in_listing(
                         from urllib.parse import urljoin
                         row_href = urljoin(driver.current_url, row_href)
                     if local_hash and row_href:
-                        phash = compute_portal_file_sha256(driver, row_href, log_func=log)
+                        phash = _lookup_phash(row_href)
                         if phash and phash == local_hash:
                             log('info', f"[CHECKSUM MATCH] '{file_name}' matched row by SHA-256 hash.")
                             return True

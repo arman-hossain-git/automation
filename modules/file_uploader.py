@@ -44,6 +44,8 @@ from core.selenium_helpers import (
     verify_uploaded_file_strict,
     file_exists_in_listing,
     compute_portal_file_sha256,
+    get_portal_requests_session,
+    compute_portal_folder_sha256_batch,
     click_folder_by_name,
     delete_portal_file_by_name,
     detect_unsupported_format_error,
@@ -415,6 +417,20 @@ class FileUploader:
                             portal_file_names_clean = {cf['name'].strip().lower(): cf['name'] for cf in current_portal_files}
                             portal_file_sanitized_clean = {sanitize_upload_filename(cf['name']).strip().lower(): cf['name'] for cf in current_portal_files}
                             portal_file_hashes = {}  # Cache of href -> sha256 hex digest
+                            portal_session = None
+
+                            if not self._allow_duplicates and current_portal_files:
+                                try:
+                                    portal_session = get_portal_requests_session(driver)
+                                    self._log('info', f"Calculating SHA-256 checksums concurrently for {len(current_portal_files)} portal file(s)...")
+                                    portal_file_hashes = compute_portal_folder_sha256_batch(
+                                        driver, current_portal_files, session=portal_session, max_workers=6, log_func=self._log
+                                    )
+                                except Exception as be:
+                                    self._log('debug', f"Concurrent SHA-256 batch notice (using on-demand verification): {be}")
+                                    portal_file_hashes = {}
+
+                            local_file_hashes = {}  # In-memory cache for local src_path -> sha256
 
                             # Expected files for this folder
                             expected_files = category['files']
@@ -554,12 +570,13 @@ class FileUploader:
                                 skip_validation = "already_uploaded"
 
                                 if not self._allow_duplicates:
-                                    local_hash = ""
-                                    if os.path.isfile(src_path):
+                                    local_hash = local_file_hashes.get(src_path)
+                                    if local_hash is None and os.path.isfile(src_path):
                                         try:
                                             local_hash = compute_file_sha256(src_path)
+                                            local_file_hashes[src_path] = local_hash
                                         except Exception:
-                                            pass
+                                            local_hash = ""
 
                                     # 1. Match by name first:
                                     matched_cf = (
@@ -581,9 +598,11 @@ class FileUploader:
                                         cf_name = matched_cf.get('name', file_name)
                                         cf_href = matched_cf.get('href')
                                         if cf_href and local_hash:
-                                            if cf_href not in portal_file_hashes:
-                                                portal_file_hashes[cf_href] = compute_portal_file_sha256(driver, cf_href, log_func=self._log)
-                                            portal_hash = portal_file_hashes[cf_href]
+                                            portal_hash = portal_file_hashes.get(cf_href)
+                                            if not portal_hash:
+                                                portal_hash = compute_portal_file_sha256(driver, cf_href, session=portal_session, log_func=self._log)
+                                                if portal_hash:
+                                                    portal_file_hashes[cf_href] = portal_hash
                                             if portal_hash:
                                                 if portal_hash == local_hash:
                                                     already_on_destination = True
@@ -596,6 +615,7 @@ class FileUploader:
                                                     portal_file_sanitized_map.pop(un_lower, None)
                                                     portal_file_names_clean.pop(fn_lower, None)
                                                     portal_file_sanitized_clean.pop(un_lower, None)
+                                                    portal_file_hashes.pop(cf_href, None)
                                                     already_on_destination = False
                                             else:
                                                 already_on_destination = True
@@ -612,9 +632,11 @@ class FileUploader:
                                             cf_href = cf.get('href')
                                             if not cf_href:
                                                 continue
-                                            if cf_href not in portal_file_hashes:
-                                                portal_file_hashes[cf_href] = compute_portal_file_sha256(driver, cf_href, log_func=self._log)
-                                            portal_hash = portal_file_hashes[cf_href]
+                                            portal_hash = portal_file_hashes.get(cf_href)
+                                            if not portal_hash:
+                                                portal_hash = compute_portal_file_sha256(driver, cf_href, session=portal_session, log_func=self._log)
+                                                if portal_hash:
+                                                    portal_file_hashes[cf_href] = portal_hash
                                             if portal_hash and portal_hash == local_hash:
                                                 already_on_destination = True
                                                 skip_reason = f"Content matched existing file '{cf.get('name')}' via SHA-256 checksum ({local_hash[:10]}...)"
@@ -629,6 +651,8 @@ class FileUploader:
                                             upload_name=upload_name,
                                             local_path=src_path,
                                             table_snapshot=initial_snapshot,
+                                            portal_file_hashes=portal_file_hashes,
+                                            session=portal_session,
                                             log_func=self._log
                                         )
                                         if already_on_destination:
@@ -1097,9 +1121,16 @@ class FileUploader:
                                             log_entry['actionComment'] = f"Rollback retry error: {describe_exception(re_err)}"
                                     else:
                                         # Table snapshot did not capture row, but the batch/single upload transaction was accepted and confirmed
-                                        log_entry['validation'] = 'uploaded_unverified'
-                                        log_entry['actionComment'] = "Uploaded (pending portal table indexing)"
-                                        self._log('info', f"Upload confirmed for '{fn}' in folder '{category['name'] or 'root'}' (pending portal background indexing).")
+                                        log_entry['action'] = 'failed'
+                                        log_entry['validation'] = 'missing_from_portal'
+                                        log_entry['actionComment'] = "Upload submission accepted, but file missing/dropped from portal table"
+                                        self._log('warning', f"Upload unverified: '{fn}' not found in folder '{category['name'] or 'root'}' after submission.")
+
+                            if portal_session:
+                                try:
+                                    portal_session.close()
+                                except Exception:
+                                    pass
 
                             # Return to parent target folder for next category
                             if not category.get('is_root'):
@@ -1744,6 +1775,18 @@ class FileUploader:
                 current_files = get_portal_files_in_current_table(driver, config, wait_timeout=1.5)
                 current_file_names_clean = {cf['name'].strip().lower(): cf['name'] for cf in current_files}
 
+                audit_session = None
+                audit_portal_hashes = {}
+                if current_files:
+                    try:
+                        audit_session = get_portal_requests_session(driver)
+                        self._log('info', f"[AUDIT] Verifying SHA-256 checksums concurrently for {len(current_files)} file(s) in '{folder_name}'...")
+                        audit_portal_hashes = compute_portal_folder_sha256_batch(
+                            driver, current_files, session=audit_session, max_workers=6, log_func=self._log
+                        )
+                    except Exception as be:
+                        self._log('debug', f"Audit SHA-256 batch notice: {be}")
+
                 expected_clean_map = {f.strip().lower(): f for f in expected_files}
                 expected_sanitized_clean_map = {sanitize_upload_filename(f).strip().lower(): f for f in expected_files}
 
@@ -1766,15 +1809,18 @@ class FileUploader:
                     un_lower = upload_name.strip().lower()
                     src_path = os.path.join(cat_info['path'], file_name)
 
-                    is_present = (
-                        fn_lower in current_file_names_clean
-                        or un_lower in current_file_names_clean
-                        or file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log)
+                    is_present = file_exists_in_listing(
+                        driver, file_name, config,
+                        upload_name=upload_name,
+                        local_path=src_path,
+                        portal_file_hashes=audit_portal_hashes,
+                        session=audit_session,
+                        log_func=self._log
                     )
 
                     if is_present:
                         correct_verified += 1
-                        self._log('info', f"[AUDIT VERIFIED] '{file_name}' already exists in folder '{folder_name}' on portal — skipping upload.")
+                        self._log('info', f"[AUDIT VERIFIED] '{file_name}' verified present via SHA-256 in '{folder_name}' — skipping upload.")
                     else:
                         missing_files.append((file_name, upload_name, src_path))
 
@@ -1810,6 +1856,12 @@ class FileUploader:
                                 os.remove(tmp_path)
                             except OSError:
                                 pass
+
+                if audit_session:
+                    try:
+                        audit_session.close()
+                    except Exception:
+                        pass
 
                 # Return to target parent folder for next row
                 self._return_to_target_folder(driver, wait, config, files_docs_root_url, target_folder_name, student_id)

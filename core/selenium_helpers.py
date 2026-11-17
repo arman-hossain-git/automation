@@ -1095,6 +1095,37 @@ def get_all_portal_folder_details(driver, config: dict) -> list[dict]:
     NOTE: Only entries that contain a (count) suffix — e.g. 'Admissions Inquiry (3)' — are
     treated as folders. Plain links without a count (breadcrumbs, nav buttons) are skipped.
     """
+    # Fast path: in-browser JavaScript query (executes in ~5ms without multi-roundtrip Selenium IPC)
+    try:
+        js_folders = driver.execute_script("""
+            return (function() {
+                var anchors = document.querySelectorAll("table td a, table a");
+                var found = [];
+                var seen = {};
+                for (var i = 0; i < anchors.length; i++) {
+                    var el = anchors[i];
+                    if (el.closest('.breadcrumb') || el.closest('.nav') || el.closest('#breadcrumb') || el.closest('#nav')) continue;
+                    var text = (el.textContent || el.innerText || '').trim().replace(/\\s+/g, ' ');
+                    if (!text || text.length < 1 || text.length > 120) continue;
+                    if (/\\.[a-zA-Z0-9]{2,5}$/.test(text)) continue;
+                    var m = text.match(/\\((\\d+)\\)\\s*$/);
+                    if (!m) continue;
+                    var count = parseInt(m[1], 10);
+                    var cleanName = text.replace(/\\s*\\(\\d+\\)\\s*$/, '').trim();
+                    var k = cleanName.toLowerCase();
+                    if (k && !seen[k]) {
+                        seen[k] = true;
+                        found.push({name: cleanName, count: count, raw: text});
+                    }
+                }
+                return found;
+            })();
+        """)
+        if isinstance(js_folders, list) and len(js_folders) > 0:
+            return js_folders
+    except Exception:
+        pass
+
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
     found = []
@@ -1156,6 +1187,8 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
     """Scan and dump the current folder listing table in ONE pass.
     Extracts all files, URLs, sizes, and row metadata into a structured snapshot
     dictionary so post-upload verification does not need to repeatedly query or reload the DOM.
+    Uses an ultra-fast in-browser JavaScript extraction first (~10ms), falling back to
+    standard Selenium queries if needed.
     """
     import os as _os
     import re as _re
@@ -1164,6 +1197,169 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
         "admissions inquiry", "students inquiry", "files & documents",
         "files and documents", "files & docs", "documents"
     ]
+    files_list: list[dict] = []
+    by_name_map: dict[str, dict] = {}
+
+    # -------------------------------------------------------------------------
+    # FAST PATH: In-browser JavaScript DOM extraction (1 single IPC roundtrip)
+    # -------------------------------------------------------------------------
+    try:
+        js_items = driver.execute_script("""
+            return (function() {
+                var protectedFolders = ['admissions inquiry', 'students inquiry', 'files & documents', 'files and documents', 'files & docs', 'documents'];
+                var knownExtRegex = /\\.(pdf|docx?|xlsx?|pptx?|txt|csv|png|jpe?g|gif|zip|rar|rtf|bmp|tiff?|msg|mp4|mp3|wav|ogg|webm|odp|ods|odt)(\\s|\\b|$)/i;
+                var extractFnameRegex = /[\\w\\-.()+'_]+(?:\\s+[\\w\\-.()+'_]+)*\\.(pdf|docx?|xlsx?|pptx?|txt|csv|png|jpe?g|gif|zip|rar|rtf|bmp|tiff?|msg|mp4|mp3|wav|ogg|webm|odp|ods|odt)/i;
+                var sizeRegex = /\\b\\d+(?:\\.\\d+)?\\s*(?:KB|MB|GB|Bytes|B)\\b/i;
+
+                var tables = [];
+                var sdt = document.getElementById('SortedDataTable');
+                if (sdt) tables.push(sdt);
+                var ts = document.querySelectorAll('table.tablesorter');
+                for (var i = 0; i < ts.length; i++) tables.push(ts[i]);
+
+                if (tables.length === 0) {
+                    var allTables = document.querySelectorAll('table');
+                    for (var t = 0; t < allTables.length; t++) {
+                        var ths = allTables[t].querySelectorAll('th');
+                        var match = false;
+                        for (var h = 0; h < ths.length; h++) {
+                            var txt = (ths[h].textContent || '').toLowerCase();
+                            if (txt.indexOf('file') !== -1) { match = true; break; }
+                        }
+                        if (match) { tables.push(allTables[t]); break; }
+                    }
+                }
+                if (tables.length === 0) {
+                    tables = Array.from(document.querySelectorAll('table'));
+                }
+
+                var files = [];
+                var seenKeys = {};
+
+                for (var t = 0; t < tables.length; t++) {
+                    var rows = tables[t].querySelectorAll('tr');
+                    for (var r = 0; r < rows.length; r++) {
+                        var row = rows[r];
+                        if (!row.querySelector('td')) continue;
+                        var rowText = (row.textContent || '').trim();
+                        var rowLower = rowText.toLowerCase();
+
+                        var prot = false;
+                        for (var p = 0; p < protectedFolders.length; p++) {
+                            if (rowLower.indexOf(protectedFolders[p]) !== -1) { prot = true; break; }
+                        }
+                        if (prot) continue;
+
+                        var candEls = row.querySelectorAll('a, span, td');
+                        var rowSize = '';
+                        var sm = rowText.match(sizeRegex);
+                        if (sm) rowSize = sm[0];
+
+                        var rowDlHref = '';
+                        var anchors = row.querySelectorAll('a[href]');
+                        for (var a = 0; a < anchors.length; a++) {
+                            var ah = anchors[a].href || '';
+                            if (ah.indexOf('admin_download_required_and_audit_files') !== -1 || ah.indexOf('downloadFilesType=') !== -1) continue;
+                            if (ah.indexOf('get_repository_file') !== -1 || ah.indexOf('getfile') !== -1 || ah.indexOf('download') !== -1 || ah.indexOf('repositoryFileId') !== -1 || ah.indexOf('fileId') !== -1) {
+                                rowDlHref = ah; break;
+                            }
+                        }
+
+                        for (var c = 0; c < candEls.length; c++) {
+                            var el = candEls[c];
+                            var text = (el.textContent || el.innerText || '').trim().replace(/\\s+/g, ' ');
+                            var title = (el.getAttribute('title') || el.getAttribute('data-name') || el.getAttribute('download') || '').trim();
+                            if (!text && !title) continue;
+
+                            var tLow = text.toLowerCase();
+                            if (tLow.indexOf('delete') !== -1 || tLow.indexOf('remove') !== -1 || tLow.indexOf('upload') !== -1 || tLow.indexOf('new folder') !== -1 || tLow.indexOf('select all') !== -1) {
+                                if (!title) continue;
+                            }
+
+                            if (knownExtRegex.test(text) || knownExtRegex.test(title)) {
+                                var href = (el.tagName === 'A' && el.href) ? el.href : '';
+                                if (href.indexOf('admin_download_required_and_audit_files') !== -1 || href.indexOf('downloadFilesType=') !== -1 || href.indexOf('javascript:') === 0) {
+                                    href = '';
+                                }
+                                if (!href && rowDlHref) href = rowDlHref;
+
+                                var fname = '';
+                                var m1 = title ? title.match(extractFnameRegex) : null;
+                                if (m1) fname = m1[0];
+                                else {
+                                    var m2 = text.match(extractFnameRegex);
+                                    if (m2) fname = m2[0];
+                                    else if (href) {
+                                        var m3 = href.match(extractFnameRegex);
+                                        if (m3) fname = m3[0];
+                                    }
+                                }
+                                if (!fname) fname = title || text;
+
+                                var k = fname.toLowerCase() + '|' + href;
+                                if (!seenKeys[k]) {
+                                    seenKeys[k] = true;
+                                    files.push({name: fname, href: href, size: rowSize, raw: text, row_raw: rowText});
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                return files;
+            })();
+        """)
+
+        if isinstance(js_items, list):
+            for item in js_items:
+                canonical_name = item.get('name') or ''
+                href = item.get('href') or ''
+                size_text = item.get('size') or ''
+                text = item.get('raw') or ''
+                row_raw = item.get('row_raw') or text
+
+                clean_keys = []
+                seen_ck = set()
+                def _add_ck(s):
+                    k = s.strip().lower()
+                    if k and k not in seen_ck:
+                        seen_ck.add(k)
+                        clean_keys.append(k)
+
+                for fn in (canonical_name, text):
+                    if fn:
+                        _add_ck(fn)
+                        _add_ck(fn.replace(' ', '_'))
+                        _add_ck(fn.replace('_', ' '))
+                        _base, _ext = _os.path.splitext(fn)
+                        if _ext and len(_base) >= 3:
+                            _add_ck(_base)
+                            _add_ck(_base.replace(' ', '_'))
+                            _add_ck(_base.replace('_', ' '))
+
+                entry = {
+                    'name': canonical_name,
+                    'clean_name': clean_keys[0] if clean_keys else '',
+                    'href': href,
+                    'size_str': size_text,
+                    'size_text': size_text,
+                    'raw_text': row_raw,
+                    'row': None,
+                    'element': None,
+                }
+                files_list.append(entry)
+                for ck in clean_keys:
+                    by_name_map[ck] = entry
+
+            return {
+                'files': files_list,
+                'by_name': by_name_map,
+                'count': len(files_list),
+                'timestamp': time.time(),
+            }
+    except Exception:
+        pass
+
     table = config.get('folder_listing_table_xpath', '')
     scope = table if table else ''
     files_list: list[dict] = []
@@ -1268,6 +1464,9 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
                         if href and not href.startswith(('http://', 'https://', 'javascript:')):
                             href = urljoin(driver.current_url, href)
 
+                        if href and any(bad in href.lower() for bad in ['admin_download_required_and_audit_files', 'downloadfilestype=', 'action=export']):
+                            href = ''
+
                         # Extract size text if present in row cells or row text
                         size_text = ""
                         try:
@@ -1295,7 +1494,7 @@ def get_portal_table_snapshot(driver, config: dict, wait_timeout: float = 2.5) -
                             r'pdf|docx?|xlsx?|pptx?|txt|csv|png|jpe?g|gif|zip'
                             r'|rar|rtf|bmp|tiff?|msg|mp4|mp3|wav|ogg|webm|odp|ods|odt'
                         )
-                        _fname_pat = rf'[\w\-.()+]+(?:\s+[\w\-.()+]+)*\.(?:{_known_exts})'
+                        _fname_pat = rf'[\w\-.()+\',]+(?:\s+[\w\-.()+\',]+)*\.(?:{_known_exts})'
 
                         def _extract_fname(s):
                             m = _re.search(_fname_pat, s, _re.I)
@@ -1461,10 +1660,21 @@ def verify_uploaded_file_strict(
                 break
 
     if not entry:
-        # Flexible matching for truncated filenames (e.g. '89ffb470-1c52...jpg') or raw row text
+        # Flexible matching for truncated filenames (e.g. '89ffb470-1c52...jpg') or portal-truncated base names
         base_prefix = target_clean[:16] if len(target_clean) > 16 else target_clean
+        target_base, _ = os.path.splitext(target_clean)
         for k, v in table_snapshot.get('by_name', {}).items():
-            if base_prefix in k or (len(k) > 10 and k in target_clean):
+            k_base, _ = os.path.splitext(k)
+            if (
+                base_prefix in k
+                or (len(k) > 10 and k in target_clean)
+                or (len(k_base) >= 4 and (k_base in target_base or target_base.startswith(k_base)))
+            ):
+                # If deep hash check is requested and candidate has href, verify via SHA-256
+                c_href = v.get('href')
+                if deep_hash_check and c_href and local_path and os.path.isfile(local_path):
+                    if verify_portal_file_content(driver, c_href, local_path, log_func=log):
+                        return True, "verified_sha256"
                 entry = v
                 break
 
@@ -1572,6 +1782,11 @@ def compute_portal_file_sha256(driver, download_url: str, session=None, log_func
     re-handshaking TLS.
     """
     if not download_url:
+        return None
+    # Filter out bogus non-file URLs (e.g. bulk audit downloads that hang/return HTTP 202)
+    if any(bad in download_url.lower() for bad in ['admin_download_required_and_audit_files', 'downloadfilestype=', 'action=export']):
+        if log_func:
+            log_func('debug', f"Skipping non-file portal URL: {download_url}")
         return None
     try:
         import hashlib

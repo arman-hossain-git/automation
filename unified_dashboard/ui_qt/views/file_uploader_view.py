@@ -202,11 +202,12 @@ class FileUploaderView(BaseToolWidget):
             return
 
         def on_progress(data: dict):
-            t = data.get("type")
-            if t == "file_done":
-                prog_cb(data.get("files_done", 0), data.get("files_total", 0))
-            elif t in ("student_start", "student_done"):
-                prog_cb(data.get("students_traversed", data.get("idx", 0)), data.get("total_students", len(students)))
+            # Route the typed progress event to the KPI handler ONLY.
+            # update_kpis (called from _handle_kpi_event) already updates the
+            # progress bar, badge and telemetry graph with correct per-dimension
+            # values.  Calling prog_cb here too would cause update_progress to
+            # overwrite self.students_traversed with file counts (or vice versa)
+            # because that generic slot cannot distinguish student vs file totals.
             kpi_cb(data)
 
         # skip_dups=True (default) -> check portal before uploading (allow_duplicates=False).

@@ -208,6 +208,16 @@
       "latencies": {
         "page_load": 2.532
       }
+    },
+    "sjsm.orbundsis.com": {
+      "xpaths": {},
+      "latencies": {},
+      "strategies": {
+        "known_global_folders": [
+          "academic letter of recommendation",
+          "official transcripts"
+        ]
+      }
     }
   },
   "record_insights": {
@@ -671,5 +681,11 @@
       "confirmed_required": false,
       "last_updated": "2026-09-04 22:15:11"
     }
+  },
+  "pdf_extractor_profiles": {},
+  "data_harmonizer_profiles": {
+    "column_associations": {},
+    "composite_rules": {},
+    "fingerprint_runs": {}
   }
 }

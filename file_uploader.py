@@ -109,6 +109,9 @@ class FileUploader:
 
     _csv_lock: threading.Lock | None = None
     _run_id: str = ""
+    _global_known_folders: set = set()
+    _global_rejected_extensions: set = set()
+    _global_cache_lock: threading.Lock = threading.Lock()
 
     def __init__(self):
         self._log = lambda l, m: None
@@ -153,10 +156,15 @@ class FileUploader:
         # If a prior run with the SAME inputs was left unfinished (crash, abort,
         # shutdown), start_session() picks that same session back up instead of
         # starting over, and completed_ids lets us skip rows already done.
+        login_url = config.get('login_url', '')
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
+
         session_inputs = session_inputs or {
             'source_dir': source_dir,
             'target_folder_name': target_folder_name,
-            'login_url': config.get('login_url', ''),
+            'login_url': login_url,
         }
 
         for key, default_val in DEFAULT_XPATHS.items():
@@ -176,6 +184,10 @@ class FileUploader:
 
         login_url = config.get('login_url', '')
         domain_key = learning_engine.extract_domain(login_url)
+
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
 
         # --- LEARNING: auto-enable DevTools if this site has confirmed it needs it,
         # even though the user (or a UI default) left the checkbox unchecked. ---
@@ -241,6 +253,7 @@ class FileUploader:
             self._on_progress({
                 'type': 'init_totals',
                 'total_students': len(students),
+                'total_rows': len(students),
                 'total_files': total_files_overall,
                 'total_bytes': total_bytes_overall,
             })
@@ -368,16 +381,29 @@ class FileUploader:
                                 wait.until(EC.presence_of_element_located(
                                     (By.XPATH, config['new_folder_toolbar_button_xpath'])))
 
-                                folder_key = f"folder_exists_{category['name']}"
-                                folder_known_exists = learning_engine.get_student_insight(student_id, folder_key)
+                                cat_name_clean = category['name'].strip().lower()
+                                folder_known_exists = False
+                                with FileUploader._global_cache_lock:
+                                    if cat_name_clean in FileUploader._global_known_folders:
+                                        folder_known_exists = True
+                                if not folder_known_exists and learning_engine.is_global_folder_known(files_docs_root_url, category['name']):
+                                    folder_known_exists = True
+                                    with FileUploader._global_cache_lock:
+                                        FileUploader._global_known_folders.add(cat_name_clean)
+                                if not folder_known_exists:
+                                    folder_known_exists = bool(learning_engine.get_student_insight(student_id, f"folder_exists_{category['name']}"))
 
                                 folder_present = False
                                 if folder_known_exists:
-                                    # --- LEARNING: Trust that folder already exists ---
-                                    self._log('info', f"[LEARNING] Folder '{category['name']}' known to exist for student {student_id} — skipping creation check.")
+                                    # --- LEARNING: Trust that folder exists globally ---
+                                    self._log('info', f"[LEARNING] Folder '{category['name']}' known to exist globally — skipping creation check.")
                                     folder_present = True
                                 else:
                                     folder_present = folder_exists_in_listing(driver, category['name'], config)
+                                    if folder_present:
+                                        with FileUploader._global_cache_lock:
+                                            FileUploader._global_known_folders.add(cat_name_clean)
+                                        learning_engine.record_global_folder(files_docs_root_url, category['name'])
 
                                 if not folder_present:
                                     self._log('info', f"Creating folder '{category['name']}'...")
@@ -396,12 +422,18 @@ class FileUploader:
                                     wait.until(EC.presence_of_element_located(
                                         (By.XPATH, config['new_folder_toolbar_button_xpath'])))
 
-                                    # --- LEARNING: Mark folder as now existing ---
-                                    learning_engine.record_student_insight(student_id, folder_key, True)
+                                    # --- LEARNING: Mark folder as now existing globally ---
+                                    with FileUploader._global_cache_lock:
+                                        FileUploader._global_known_folders.add(cat_name_clean)
+                                    learning_engine.record_global_folder(files_docs_root_url, category['name'])
+                                    learning_engine.record_student_insight(student_id, f"folder_exists_{category['name']}", True)
                                 else:
-                                    self._log('info', f"Folder '{category['name']}' already exists.")
-                                    # Record it as existing in case it wasn't known before
-                                    learning_engine.record_student_insight(student_id, folder_key, True)
+                                    if not folder_known_exists:
+                                        self._log('info', f"Folder '{category['name']}' already exists.")
+                                        with FileUploader._global_cache_lock:
+                                            FileUploader._global_known_folders.add(cat_name_clean)
+                                        learning_engine.record_global_folder(files_docs_root_url, category['name'])
+                                        learning_engine.record_student_insight(student_id, f"folder_exists_{category['name']}", True)
 
                                 click_folder_by_name(driver, wait, category['name'], config,
                                                      f"Folder '{category['name']}'", log_func=self._log)
@@ -422,13 +454,9 @@ class FileUploader:
                             if not self._allow_duplicates and current_portal_files:
                                 try:
                                     portal_session = get_portal_requests_session(driver)
-                                    self._log('info', f"Calculating SHA-256 checksums concurrently for {len(current_portal_files)} portal file(s)...")
-                                    portal_file_hashes = compute_portal_folder_sha256_batch(
-                                        driver, current_portal_files, session=portal_session, max_workers=6, log_func=self._log
-                                    )
                                 except Exception as be:
-                                    self._log('debug', f"Concurrent SHA-256 batch notice (using on-demand verification): {be}")
-                                    portal_file_hashes = {}
+                                    self._log('debug', f"Portal requests session init notice: {be}")
+                                    portal_session = None
 
                             local_file_hashes = {}  # In-memory cache for local src_path -> sha256
 
@@ -504,8 +532,18 @@ class FileUploader:
                                     pass
 
                                 file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
-                                if file_ext in config.get('unsupported_extensions_list', set()):
-                                    self._log('info', f"Skipping '{file_name}' — '.{file_ext}' is configured as an unsupported format.")
+                                is_rejected = False
+                                with FileUploader._global_cache_lock:
+                                    if file_ext in FileUploader._global_rejected_extensions:
+                                        is_rejected = True
+                                if not is_rejected and learning_engine.is_file_type_rejected(login_url, file_ext):
+                                    is_rejected = True
+                                    with FileUploader._global_cache_lock:
+                                        FileUploader._global_rejected_extensions.add(file_ext)
+
+                                if is_rejected or file_ext in config.get('unsupported_extensions_list', set()):
+                                    reason_src = "learned as rejected" if is_rejected else "configured as an unsupported format"
+                                    self._log('info', f"[LEARNING] Skipping '{file_name}' — '.{file_ext}' {reason_src} on this portal.")
                                     files_done += 1
                                     bytes_done_overall += f_size
                                     batch_logs.append({
@@ -514,11 +552,10 @@ class FileUploader:
                                         'fileName':      file_name,
                                         'uploadedAs':    '-',
                                         'action':        'skipped_unsupported',
-                                        'actionComment': f"Unsupported file extension '.{file_ext}' (configured) -- not attempted, will not be retried.",
+                                        'actionComment': f"Unsupported/rejected file extension '.{file_ext}' ({reason_src}) -- not attempted, will not be retried.",
                                         'validation':    'skipped',
                                         'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
                                     })
-                                    files_done += 1
                                     self._on_progress({
                                         'type': 'file_done',
                                         'file_name': file_name,
@@ -903,12 +940,15 @@ class FileUploader:
                                                     if sig in dialogs_before_submit:
                                                         continue  # stale, pre-existing dialog
                                                     text = (d.text or d.get_attribute('textContent') or '').lower()
-                                                    if 'malformed' in text and 'invalid file name' in text:
+                                                    if ('malformed' in text and 'invalid file name' in text) or 'cannot be uploaded' in text:
                                                         malformed_full = (d.text or d.get_attribute('textContent') or 'Malformed or invalid file name').strip()
                                                         ok_clicked = click_dialog_ok_button(driver, log_func=self._log)
                                                         if not ok_clicked:
                                                             dismiss_error_dialog(driver, log_func=self._log)
-                                                        wait.until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                        try:
+                                                            WebDriverWait(driver, 2.0).until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                        except Exception:
+                                                            pass
                                                         raise MalformedFileError(malformed_full)
                                                 except MalformedFileError:
                                                     raise
@@ -938,7 +978,10 @@ class FileUploader:
                                             if _up_vis:
                                                 unsupported_txt = (_up_vis[0].text or _up_vis[0].get_attribute('textContent') or 'Unsupported file type').strip()
                                                 dismiss_error_dialog(driver, log_func=self._log)
-                                                wait.until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                try:
+                                                    WebDriverWait(driver, 2.0).until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                except Exception:
+                                                    pass
                                                 raise UnsupportedFormatError(unsupported_txt)
                                         except (UnsupportedFormatError, MalformedFileError):
                                             raise
@@ -988,31 +1031,26 @@ class FileUploader:
                                     }
                                     batch_logs.append(log_entry)
                                     category_uploaded_tracker.append({'fn': file_name, 'un': upload_name, 'sp': src_path, 'log_dict': log_entry})
-                                elif isinstance(upload_err, MalformedFileError):
+                                elif isinstance(upload_err, (MalformedFileError, UnsupportedFormatError)):
                                     files_done += 1
                                     bytes_done_overall += f_sz
-                                    self._log('warning', f"'{file_name}' rejected by target system as malformed or having an invalid file name: {upload_err}")
+                                    file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
+                                    if file_ext:
+                                        with FileUploader._global_cache_lock:
+                                            FileUploader._global_rejected_extensions.add(file_ext)
+                                        learning_engine.record_rejected_file_type(login_url, file_ext)
+                                        self._log('warning', f"[LEARNING] Learned rejected file format '.{file_ext}' for this portal. Future files with this format will be skipped upfront in 0.0s.")
+
+                                    is_unsup = isinstance(upload_err, UnsupportedFormatError)
+                                    action_name = 'skipped_unsupported' if is_unsup else 'skipped_malformed'
+                                    comment_name = f"Unsupported file format ({upload_err}) -- will not be retried." if is_unsup else f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried."
                                     batch_logs.append({
                                         'studentId':     student_id,
                                         'category':      category['name'],
                                         'fileName':      file_name,
                                         'uploadedAs':    upload_name,
-                                        'action':        'skipped_malformed',
-                                        'actionComment': f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried.",
-                                        'validation':    'skipped',
-                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                    })
-                                elif isinstance(upload_err, UnsupportedFormatError):
-                                    files_done += 1
-                                    bytes_done_overall += f_sz
-                                    self._log('warning', f"'{file_name}' rejected by target system as an unsupported format: {upload_err}")
-                                    batch_logs.append({
-                                        'studentId':     student_id,
-                                        'category':      category['name'],
-                                        'fileName':      file_name,
-                                        'uploadedAs':    upload_name,
-                                        'action':        'skipped_unsupported',
-                                        'actionComment': f"Unsupported file format ({upload_err}) -- will not be retried.",
+                                        'action':        action_name,
+                                        'actionComment': comment_name,
                                         'validation':    'skipped',
                                         'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
                                     })
@@ -1208,9 +1246,11 @@ class FileUploader:
                 # an abort-triggered `break` -- i.e. the run is genuinely complete.
                 loop_completed = True
                 self._on_progress({
-                    'type': 'student_done',
+                    'type': 'run_finished',
                     'students_traversed': len(students),
                     'total_students': len(students),
+                    'rows_done': len(students),
+                    'total_rows': len(students),
                     'files_done': total_uploaded,
                     'files_total': total_files_overall,
                     'bytes_done': bytes_done_overall,
@@ -1297,10 +1337,15 @@ class FileUploader:
         if target_folder_name == NO_TARGET_FOLDER_LABEL:
             target_folder_name = ""
 
+        login_url = config.get('login_url', '')
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
+
         session_inputs = session_inputs or {
             'source_dir': source_dir,
             'target_folder_name': target_folder_name,
-            'login_url': config.get('login_url', ''),
+            'login_url': login_url,
         }
         session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=total_count)
         completed_ids = SessionManager.get_all_completed_item_ids(MODULE_ID)
@@ -1339,7 +1384,17 @@ class FileUploader:
             if not os.path.isdir(s_root) and len(students) == 1 and list_category_folders(source_dir):
                 s_root = source_dir
             for cat in list_category_folders(s_root):
-                for fp in cat['files']:
+                for fn in cat['files']:
+                    fp = os.path.join(cat['path'], fn)
+                    try:
+                        total_files_overall += 1
+                        total_bytes_overall += os.path.getsize(fp)
+                    except OSError:
+                        pass
+        if total_files_overall == 0 and os.path.isdir(source_dir):
+            for cat in list_category_folders(source_dir):
+                for fn in cat['files']:
+                    fp = os.path.join(cat['path'], fn)
                     try:
                         total_files_overall += 1
                         total_bytes_overall += os.path.getsize(fp)
@@ -1349,6 +1404,7 @@ class FileUploader:
         _prog({
             'type': 'init_totals',
             'total_students': total_count,
+            'total_rows': total_count,
             'total_files': total_files_overall,
             'total_bytes': total_bytes_overall,
         })
@@ -1412,26 +1468,36 @@ class FileUploader:
                         if total_bytes_overall > 0:
                             merged['bytes_done'] = _shared['bytes_done']
                             merged['total_bytes'] = total_bytes_overall
+                        merged['student_files_done'] = data.get('student_files_done', data.get('files_done', 0))
+                        merged['student_files_total'] = data.get('student_files_total', data.get('files_total', 0))
                     _prog(merged)
                 elif p_type == 'student_done':
                     with _counter_lock:
-                        _shared['students_traversed'] += 1
-                        _shared['students_succeeded'] += 1
+                        _shared['students_traversed'] = min(total_count, _shared['students_traversed'] + 1)
+                        _shared['students_succeeded'] = min(total_count, _shared['students_succeeded'] + 1)
                         merged = dict(data)
                         merged['students_traversed'] = _shared['students_traversed']
                         merged['total_students'] = total_count
+                        merged['rows_done'] = _shared['students_traversed']
+                        merged['total_rows'] = total_count
+                        merged['files_done'] = _shared['files_done']
+                        merged['files_total'] = total_files_overall
                         merged['bytes_done'] = _shared['bytes_done']
                         merged['total_bytes'] = total_bytes_overall
                     _prog(merged)
                 elif p_type == 'student_start':
                     merged = dict(data)
                     with _counter_lock:
-                        merged['students_traversed'] = _shared['students_traversed']
+                        merged['students_traversed'] = min(total_count, _shared['students_traversed'])
                         merged['total_students'] = total_count
+                        merged['rows_done'] = min(total_count, _shared['students_traversed'])
+                        merged['total_rows'] = total_count
+                        merged['files_done'] = _shared['files_done']
+                        merged['files_total'] = total_files_overall
                         merged['bytes_done'] = _shared['bytes_done']
                         merged['total_bytes'] = total_bytes_overall
                     _prog(merged)
-                elif p_type in ('init_totals', 'files_total'):
+                elif p_type in ('init_totals', 'files_total', 'run_finished'):
                     pass
                 else:
                     _prog(data)
@@ -1472,6 +1538,18 @@ class FileUploader:
 
         for t in threads:
             t.join()
+
+        _prog({
+            'type': 'run_finished',
+            'students_traversed': total_count,
+            'total_students': total_count,
+            'rows_done': total_count,
+            'total_rows': total_count,
+            'files_done': _shared['files_done'],
+            'files_total': total_files_overall,
+            'bytes_done': _shared['bytes_done'],
+            'total_bytes': total_bytes_overall,
+        })
 
         duration = time.time() - run_start
         total_success = _shared['students_succeeded']
@@ -1998,6 +2076,10 @@ class FileUploader:
 
         login_url = config.get('login_url', '')
         domain_key = learning_engine.extract_domain(login_url)
+
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
         effective_devtools = learning_engine.resolve_devtools(devtools, domain_key, log_func=self._log)
         headless = settings.get("headless", False)
         if headless:
@@ -2415,6 +2497,14 @@ class FileUploader:
 
             if confirmed:
                 all_folders = get_all_portal_folder_details(driver, config)
+                if all_folders:
+                    with FileUploader._global_cache_lock:
+                        for f in all_folders:
+                            FileUploader._global_known_folders.add(f['name'].strip().lower())
+                    try:
+                        learning_engine.record_global_folders(files_docs_root_url, [f['name'] for f in all_folders])
+                    except Exception:
+                        pass
                 self._log('debug', f"[NAV] CONFIRMED inside '{target_folder_name}'. Subfolders: {[f['raw'] for f in all_folders]}")
                 return
 

@@ -27,7 +27,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 
-from core.chrome_driver import launch_chrome_driver, build_basic_options
+from core.chrome_driver import launch_chrome_driver, build_basic_options, safe_quit_driver
 from core.settings_manager import settings
 from core.selenium_helpers import (
     click_xpath,
@@ -43,6 +43,9 @@ from core.selenium_helpers import (
     get_portal_table_snapshot_adaptive,
     verify_uploaded_file_strict,
     file_exists_in_listing,
+    compute_portal_file_sha256,
+    get_portal_requests_session,
+    compute_portal_folder_sha256_batch,
     click_folder_by_name,
     delete_portal_file_by_name,
     detect_unsupported_format_error,
@@ -56,6 +59,7 @@ from core.selenium_helpers import (
     is_portal_session_expired,
 )
 from core.utils import (
+    compute_file_sha256,
     sanitize_upload_filename,
     list_category_folders,
     filter_valid_students,
@@ -105,12 +109,16 @@ class FileUploader:
 
     _csv_lock: threading.Lock | None = None
     _run_id: str = ""
+    _global_known_folders: set = set()
+    _global_rejected_extensions: set = set()
+    _global_cache_lock: threading.Lock = threading.Lock()
 
     def __init__(self):
         self._log = lambda l, m: None
         self._on_progress = lambda d: None
         self._abort = lambda: False
         self._source_dir = ""
+        self._allow_duplicates = False
 
     def run(
         self,
@@ -119,6 +127,7 @@ class FileUploader:
         source_dir: str,
         target_folder_name: str,
         devtools: bool = False,
+        allow_duplicates: bool = False,
         on_progress=None,
         abort_flag=None,
         log=None,
@@ -129,6 +138,7 @@ class FileUploader:
         self._on_progress = on_progress or (lambda d: None)
         self._abort = abort_flag or (lambda: False)
         self._source_dir = source_dir
+        self._allow_duplicates = allow_duplicates
 
         run_start = time.time()
         # Per-run identifier baked into this run's execution log filename so
@@ -146,10 +156,15 @@ class FileUploader:
         # If a prior run with the SAME inputs was left unfinished (crash, abort,
         # shutdown), start_session() picks that same session back up instead of
         # starting over, and completed_ids lets us skip rows already done.
+        login_url = config.get('login_url', '')
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
+
         session_inputs = session_inputs or {
             'source_dir': source_dir,
             'target_folder_name': target_folder_name,
-            'login_url': config.get('login_url', ''),
+            'login_url': login_url,
         }
 
         for key, default_val in DEFAULT_XPATHS.items():
@@ -169,6 +184,10 @@ class FileUploader:
 
         login_url = config.get('login_url', '')
         domain_key = learning_engine.extract_domain(login_url)
+
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
 
         # --- LEARNING: auto-enable DevTools if this site has confirmed it needs it,
         # even though the user (or a UI default) left the checkbox unchecked. ---
@@ -317,15 +336,42 @@ class FileUploader:
                         # Navigate to target parent folder (e.g. 'Admissions Inquiry') ONCE for this student
                         self._go_to_target_folder(driver, wait, config, files_docs_root_url, target_folder_name, student_id)
 
+                        # Clean up any misplaced files sitting directly in parent target folder that belong in subfolders
+                        if not self._allow_duplicates:
+                            subfolder_expected = {}
+                            for cat in category_folders:
+                                if not cat.get('is_root'):
+                                    for fn in cat['files']:
+                                        subfolder_expected[fn.strip().lower()] = cat['name']
+                                        subfolder_expected[sanitize_upload_filename(fn).strip().lower()] = cat['name']
+                            if subfolder_expected:
+                                parent_current_files = get_portal_files_in_current_table(driver, config, wait_timeout=1.2)
+                                for pf in parent_current_files:
+                                    pf_name = pf['name']
+                                    target_cat = subfolder_expected.get(pf_name.strip().lower()) or subfolder_expected.get(sanitize_upload_filename(pf_name).strip().lower())
+                                    if target_cat:
+                                        self._log('warning', f"[MISPLACED FILE] File '{pf_name}' found directly in parent folder (belongs in '{target_cat}'). Removing from parent...")
+                                        deleted = delete_portal_file_by_name(driver, wait, pf_name, config, log_func=self._log)
+                                        if deleted:
+                                            self._log('info', f"[REMOVED] Successfully deleted misplaced file '{pf_name}' from parent folder.")
+                                            batch_logs.append({
+                                                'studentId':     student_id,
+                                                'category':      target_folder_name or '(root)',
+                                                'fileName':      pf_name,
+                                                'uploadedAs':    '-',
+                                                'action':        'deleted_wrong_file',
+                                                'actionComment': f"Removed misplaced file from parent folder (belongs in '{target_cat}')",
+                                                'validation':    'deleted',
+                                                'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                            })
+
                         for category in category_folders:
                             if self._abort():
                                 break
                             self._on_progress({'type': 'category', 'name': category['name'] or '(root)'})
 
                             if category.get('is_root'):
-                                # Files live directly in the student root folder —
-                                # upload straight into the target parent; no
-                                # sub-folder is created or navigated into.
+                                # Files live directly in the student root folder
                                 self._log('info', "Uploading root-level files directly into target folder.")
                                 wait.until(EC.element_to_be_clickable(
                                     (By.XPATH, config['upload_tool_button_xpath'])))
@@ -334,16 +380,29 @@ class FileUploader:
                                 wait.until(EC.presence_of_element_located(
                                     (By.XPATH, config['new_folder_toolbar_button_xpath'])))
 
-                                folder_key = f"folder_exists_{category['name']}"
-                                folder_known_exists = learning_engine.get_student_insight(student_id, folder_key)
+                                cat_name_clean = category['name'].strip().lower()
+                                folder_known_exists = False
+                                with FileUploader._global_cache_lock:
+                                    if cat_name_clean in FileUploader._global_known_folders:
+                                        folder_known_exists = True
+                                if not folder_known_exists and learning_engine.is_global_folder_known(files_docs_root_url, category['name']):
+                                    folder_known_exists = True
+                                    with FileUploader._global_cache_lock:
+                                        FileUploader._global_known_folders.add(cat_name_clean)
+                                if not folder_known_exists:
+                                    folder_known_exists = bool(learning_engine.get_student_insight(student_id, f"folder_exists_{category['name']}"))
 
                                 folder_present = False
                                 if folder_known_exists:
-                                    # --- LEARNING: Trust that folder already exists ---
-                                    self._log('info', f"[LEARNING] Folder '{category['name']}' known to exist for student {student_id} — skipping creation check.")
+                                    # --- LEARNING: Trust that folder exists globally ---
+                                    self._log('info', f"[LEARNING] Folder '{category['name']}' known to exist globally — skipping creation check.")
                                     folder_present = True
                                 else:
                                     folder_present = folder_exists_in_listing(driver, category['name'], config)
+                                    if folder_present:
+                                        with FileUploader._global_cache_lock:
+                                            FileUploader._global_known_folders.add(cat_name_clean)
+                                        learning_engine.record_global_folder(files_docs_root_url, category['name'])
 
                                 if not folder_present:
                                     self._log('info', f"Creating folder '{category['name']}'...")
@@ -362,25 +421,103 @@ class FileUploader:
                                     wait.until(EC.presence_of_element_located(
                                         (By.XPATH, config['new_folder_toolbar_button_xpath'])))
 
-                                    # --- LEARNING: Mark folder as now existing ---
-                                    learning_engine.record_student_insight(student_id, folder_key, True)
+                                    # --- LEARNING: Mark folder as now existing globally ---
+                                    with FileUploader._global_cache_lock:
+                                        FileUploader._global_known_folders.add(cat_name_clean)
+                                    learning_engine.record_global_folder(files_docs_root_url, category['name'])
+                                    learning_engine.record_student_insight(student_id, f"folder_exists_{category['name']}", True)
                                 else:
-                                    self._log('info', f"Folder '{category['name']}' already exists.")
-                                    # Record it as existing in case it wasn't known before
-                                    learning_engine.record_student_insight(student_id, folder_key, True)
+                                    if not folder_known_exists:
+                                        self._log('info', f"Folder '{category['name']}' already exists.")
+                                        with FileUploader._global_cache_lock:
+                                            FileUploader._global_known_folders.add(cat_name_clean)
+                                        learning_engine.record_global_folder(files_docs_root_url, category['name'])
+                                        learning_engine.record_student_insight(student_id, f"folder_exists_{category['name']}", True)
 
                                 click_folder_by_name(driver, wait, category['name'], config,
                                                      f"Folder '{category['name']}'", log_func=self._log)
                                 wait.until(EC.element_to_be_clickable(
                                     (By.XPATH, config['upload_tool_button_xpath'])))
-                                # Brief settle: navigation confirmation already waited; just let AJAX
-                                # file rows paint before the initial snapshot.
-                                time.sleep(0.25)
+                                time.sleep(0.3)
                                 category_listing_url = driver.current_url
 
-                            initial_snapshot = get_portal_table_snapshot(driver, config, wait_timeout=0.5)
+                            # --- INSPECT DESTINATION PAGE ---
+                            current_portal_files = get_portal_files_in_current_table(driver, config, wait_timeout=2.0)
+                            portal_file_map = {cf['name'].strip().lower(): cf for cf in current_portal_files}
+                            portal_file_sanitized_map = {sanitize_upload_filename(cf['name']).strip().lower(): cf for cf in current_portal_files}
+                            portal_file_names_clean = {cf['name'].strip().lower(): cf['name'] for cf in current_portal_files}
+                            portal_file_sanitized_clean = {sanitize_upload_filename(cf['name']).strip().lower(): cf['name'] for cf in current_portal_files}
+                            portal_file_hashes = {}  # Cache of href -> sha256 hex digest
+                            portal_session = None
+
+                            if not self._allow_duplicates and current_portal_files:
+                                try:
+                                    portal_session = get_portal_requests_session(driver)
+                                except Exception as be:
+                                    self._log('debug', f"Portal requests session init notice: {be}")
+                                    portal_session = None
+
+                            local_file_hashes = {}  # In-memory cache for local src_path -> sha256
+
+                            # Expected files for this folder
+                            expected_files = category['files']
+                            expected_clean_map = {f.strip().lower(): f for f in expected_files}
+                            expected_sanitized_map = {sanitize_upload_filename(f).strip().lower(): f for f in expected_files}
+                            expected_variants = set()
+                            for f in expected_files:
+                                fl = f.strip().lower()
+                                fs = sanitize_upload_filename(f).strip().lower()
+                                expected_variants.add(fl)
+                                expected_variants.add(fs)
+                                expected_variants.add(fl.replace(' ', '_'))
+                                expected_variants.add(fl.replace('_', ' '))
+                                base, ext = os.path.splitext(fl)
+                                if ext and len(base) >= 3:
+                                    expected_variants.add(base)
+                                    expected_variants.add(base.replace(' ', '_'))
+                                    expected_variants.add(base.replace('_', ' '))
+
+                            # --- STEP A: REMOVE WRONG FILES FROM DESTINATION PAGE ---
+                            if not self._allow_duplicates and current_portal_files:
+                                protected_check = [
+                                    "admissions inquiry", "students inquiry", "files & documents",
+                                    "files and documents", "files & docs", "documents"
+                                ]
+                                for cf in current_portal_files:
+                                    cf_name = cf['name']
+                                    cf_lower = cf_name.strip().lower()
+                                    if any(pfc in cf_lower for pfc in protected_check):
+                                        continue
+                                    is_expected_file = (
+                                        cf_lower in expected_clean_map
+                                        or sanitize_upload_filename(cf_name).strip().lower() in expected_sanitized_map
+                                        or any(v in cf_lower or cf_lower in v for v in expected_variants if len(v) >= 4)
+                                    )
+                                    if not is_expected_file:
+                                        self._log('warning', f"[REMOVE WRONG FILE] File '{cf_name}' does not belong in '{category['name'] or 'Root'}' — deleting from destination...")
+                                        deleted = delete_portal_file_by_name(driver, wait, cf_name, config, log_func=self._log)
+                                        if deleted:
+                                            self._log('info', f"[REMOVED] Successfully deleted wrong file '{cf_name}' from destination folder '{category['name'] or 'Root'}'.")
+                                            batch_logs.append({
+                                                'studentId':     student_id,
+                                                'category':      category['name'] or '(root)',
+                                                'fileName':      cf_name,
+                                                'uploadedAs':    '-',
+                                                'action':        'deleted_wrong_file',
+                                                'actionComment': f"Removed wrong file from destination folder '{category['name'] or 'Root'}'",
+                                                'validation':    'deleted',
+                                                'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                            })
+                                            portal_file_names_clean.pop(cf_lower, None)
+                                            portal_file_sanitized_clean.pop(sanitize_upload_filename(cf_name).strip().lower(), None)
+                                            portal_file_map.pop(cf_lower, None)
+                                            portal_file_sanitized_map.pop(sanitize_upload_filename(cf_name).strip().lower(), None)
+
+                            initial_snapshot = get_portal_table_snapshot(driver, config, wait_timeout=1.0)
                             category_uploaded_tracker = []
                             pending_files = []
+
+                            # --- STEP B: CHECK FOR DUPLICATES & IDENTIFY MISSING FILES ---
                             for file_name in category['files']:
                                 if self._abort():
                                     break
@@ -394,8 +531,18 @@ class FileUploader:
                                     pass
 
                                 file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
-                                if file_ext in config.get('unsupported_extensions_list', set()):
-                                    self._log('info', f"Skipping '{file_name}' — '.{file_ext}' is configured as an unsupported format.")
+                                is_rejected = False
+                                with FileUploader._global_cache_lock:
+                                    if file_ext in FileUploader._global_rejected_extensions:
+                                        is_rejected = True
+                                if not is_rejected and learning_engine.is_file_type_rejected(login_url, file_ext):
+                                    is_rejected = True
+                                    with FileUploader._global_cache_lock:
+                                        FileUploader._global_rejected_extensions.add(file_ext)
+
+                                if is_rejected or file_ext in config.get('unsupported_extensions_list', set()):
+                                    reason_src = "learned as rejected" if is_rejected else "configured as an unsupported format"
+                                    self._log('info', f"[LEARNING] Skipping '{file_name}' — '.{file_ext}' {reason_src} on this portal.")
                                     files_done += 1
                                     bytes_done_overall += f_size
                                     batch_logs.append({
@@ -404,7 +551,7 @@ class FileUploader:
                                         'fileName':      file_name,
                                         'uploadedAs':    '-',
                                         'action':        'skipped_unsupported',
-                                        'actionComment': f"Unsupported file extension '.{file_ext}' (configured) -- not attempted, will not be retried.",
+                                        'actionComment': f"Unsupported/rejected file extension '.{file_ext}' ({reason_src}) -- not attempted, will not be retried.",
                                         'validation':    'skipped',
                                         'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
                                     })
@@ -416,6 +563,8 @@ class FileUploader:
                                         'files_total': total_files_overall,
                                         'bytes_done': bytes_done_overall,
                                         'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
                                     })
                                     continue
 
@@ -442,13 +591,112 @@ class FileUploader:
                                         'files_total': total_files_overall,
                                         'bytes_done': bytes_done_overall,
                                         'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
                                     })
                                     continue
 
                                 upload_name = sanitize_upload_filename(file_name)
+                                fn_lower = file_name.strip().lower()
+                                un_lower = upload_name.strip().lower()
 
-                                if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, table_snapshot=initial_snapshot, log_func=self._log):
-                                    self._log('info', f"File '{file_name}' already exists in '{category['name']}' on portal (content verified) — skipping duplicate upload.")
+                                # Check if file already exists on destination page
+                                already_on_destination = False
+                                skip_reason = f"Already uploaded — confirmed on destination page '{category['name'] or 'Root'}' (duplicate skipped)"
+                                skip_validation = "already_uploaded"
+
+                                if not self._allow_duplicates:
+                                    local_hash = local_file_hashes.get(src_path)
+                                    if local_hash is None and os.path.isfile(src_path):
+                                        try:
+                                            local_hash = compute_file_sha256(src_path)
+                                            local_file_hashes[src_path] = local_hash
+                                        except Exception:
+                                            local_hash = ""
+
+                                    # 1. Match by name first:
+                                    matched_cf = (
+                                        portal_file_map.get(fn_lower)
+                                        or portal_file_map.get(un_lower)
+                                        or portal_file_sanitized_map.get(fn_lower)
+                                        or portal_file_sanitized_map.get(un_lower)
+                                    )
+                                    if not matched_cf:
+                                        for v in [fn_lower.replace(' ', '_'), fn_lower.replace('_', ' ')]:
+                                            if v in portal_file_map:
+                                                matched_cf = portal_file_map[v]
+                                                break
+                                            if v in portal_file_sanitized_map:
+                                                matched_cf = portal_file_sanitized_map[v]
+                                                break
+
+                                    if matched_cf:
+                                        cf_name = matched_cf.get('name', file_name)
+                                        cf_href = matched_cf.get('href')
+                                        if cf_href and local_hash:
+                                            portal_hash = portal_file_hashes.get(cf_href)
+                                            if not portal_hash:
+                                                portal_hash = compute_portal_file_sha256(driver, cf_href, session=portal_session, log_func=self._log)
+                                                if portal_hash:
+                                                    portal_file_hashes[cf_href] = portal_hash
+                                            if portal_hash:
+                                                if portal_hash == local_hash:
+                                                    already_on_destination = True
+                                                    skip_reason = f"SHA-256 checksum verified match with '{cf_name}' ({local_hash[:10]}...)"
+                                                    skip_validation = "verified_sha256"
+                                                else:
+                                                    self._log('warning', f"[CONTENT MISMATCH] '{file_name}' exists on portal as '{cf_name}' but SHA-256 differs (local: {local_hash[:8]}... vs portal: {portal_hash[:8]}...). Overwriting with local version...")
+                                                    delete_portal_file_by_name(driver, wait, cf_name, config, log_func=self._log)
+                                                    portal_file_map.pop(fn_lower, None)
+                                                    portal_file_sanitized_map.pop(un_lower, None)
+                                                    portal_file_names_clean.pop(fn_lower, None)
+                                                    portal_file_sanitized_clean.pop(un_lower, None)
+                                                    portal_file_hashes.pop(cf_href, None)
+                                                    already_on_destination = False
+                                            else:
+                                                already_on_destination = True
+                                                skip_reason = f"Name matched '{cf_name}' on destination page (duplicate skipped)"
+                                                skip_validation = "already_uploaded"
+                                        else:
+                                            already_on_destination = True
+                                            skip_reason = f"Name matched '{cf_name}' on destination page (duplicate skipped)"
+                                            skip_validation = "already_uploaded"
+
+                                    # 2. Check content hash across ALL files in portal folder (handles truncated/renamed portal files)
+                                    if not already_on_destination and local_hash and current_portal_files:
+                                        for cf in current_portal_files:
+                                            cf_href = cf.get('href')
+                                            if not cf_href:
+                                                continue
+                                            portal_hash = portal_file_hashes.get(cf_href)
+                                            if not portal_hash:
+                                                portal_hash = compute_portal_file_sha256(driver, cf_href, session=portal_session, log_func=self._log)
+                                                if portal_hash:
+                                                    portal_file_hashes[cf_href] = portal_hash
+                                            if portal_hash and portal_hash == local_hash:
+                                                already_on_destination = True
+                                                skip_reason = f"Content matched existing file '{cf.get('name')}' via SHA-256 checksum ({local_hash[:10]}...)"
+                                                skip_validation = "verified_sha256"
+                                                self._log('info', f"[CHECKSUM MATCH] '{file_name}' content (SHA-256: {local_hash[:10]}...) is identical to portal file '{cf.get('name')}' — skipping duplicate upload.")
+                                                break
+
+                                    # 3. Fallback: check table snapshot / DOM listing
+                                    if not already_on_destination:
+                                        already_on_destination = file_exists_in_listing(
+                                            driver, file_name, config,
+                                            upload_name=upload_name,
+                                            local_path=src_path,
+                                            table_snapshot=initial_snapshot,
+                                            portal_file_hashes=portal_file_hashes,
+                                            session=portal_session,
+                                            log_func=self._log
+                                        )
+                                        if already_on_destination:
+                                            skip_reason = f"Found in destination folder listing (duplicate skipped)"
+                                            skip_validation = "already_uploaded"
+
+                                if already_on_destination:
+                                    self._log('info', f"[SKIP] '{file_name}' already exists on destination page '{category['name'] or 'Root'}' ({skip_reason}) — skipping duplicate upload.")
                                     files_done += 1
                                     total_uploaded += 1
                                     bytes_done_overall += f_size
@@ -457,9 +705,9 @@ class FileUploader:
                                         'category':      category['name'],
                                         'fileName':      file_name,
                                         'uploadedAs':    upload_name,
-                                        'action':        'uploaded',
-                                        'actionComment': 'Already exists on portal (duplicate prevented)',
-                                        'validation':    'already_uploaded',
+                                        'action':        'skipped',
+                                        'actionComment': skip_reason,
+                                        'validation':    skip_validation,
                                         'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
                                     })
                                     self._on_progress({
@@ -470,6 +718,8 @@ class FileUploader:
                                         'files_total': total_files_overall,
                                         'bytes_done': bytes_done_overall,
                                         'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
                                     })
                                     continue
 
@@ -544,13 +794,61 @@ class FileUploader:
                                                 'files_total': total_files_overall,
                                                 'bytes_done': bytes_done_overall,
                                                 'total_bytes': total_bytes_overall,
+                                                'student_files_done': files_done,
+                                                'student_files_total': total_files,
                                             })
 
                                         self._log('info', f"Batch upload complete! All {len(valid_batch_items)} files uploaded simultaneously.")
                                         pending_files = []
                                     except Exception as e:
-                                        self._log('info', f"Batch multi-file upload notice: {describe_exception(e)} — falling back to single-file upload sequence.")
-                                        pending_files = valid_batch_items
+                                        self._log('info', f"Batch multi-file upload notice: {describe_exception(e)} — verifying destination before fallback...")
+                                        time.sleep(1.0)
+                                        batch_verify_snapshot = get_portal_table_snapshot_adaptive(
+                                            driver, config,
+                                            expected_filenames=[un for _, un, _ in valid_batch_items],
+                                            max_timeout=3.5,
+                                            poll_interval=0.3,
+                                            log_func=self._log
+                                        )
+                                        unprocessed_items = []
+                                        for fn, un, sp in valid_batch_items:
+                                            if file_exists_in_listing(driver, fn, config, upload_name=un, local_path=sp, table_snapshot=batch_verify_snapshot, log_func=self._log):
+                                                self._log('info', f"[RECOVERED] Batch-submitted '{fn}' verified present on destination page — skipping re-upload.")
+                                                files_done += 1
+                                                total_uploaded += 1
+                                                f_sz = 0
+                                                try:
+                                                    if os.path.isfile(sp):
+                                                        f_sz = os.path.getsize(sp)
+                                                except OSError:
+                                                    pass
+                                                bytes_done_overall += f_sz
+                                                log_entry = {
+                                                    'studentId':     student_id,
+                                                    'category':      category['name'],
+                                                    'fileName':      fn,
+                                                    'uploadedAs':    un,
+                                                    'action':        'uploaded',
+                                                    'actionComment': 'Success (batch upload verified after timeout)',
+                                                    'validation':    'verified_dom',
+                                                    'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                                }
+                                                batch_logs.append(log_entry)
+                                                category_uploaded_tracker.append({'fn': fn, 'un': un, 'sp': sp, 'log_dict': log_entry})
+                                                self._on_progress({
+                                                    'type': 'file_done',
+                                                    'file_name': fn,
+                                                    'file_size': f_sz,
+                                                    'files_done': total_uploaded,
+                                                    'files_total': total_files_overall,
+                                                    'bytes_done': bytes_done_overall,
+                                                    'total_bytes': total_bytes_overall,
+                                                    'student_files_done': files_done,
+                                                    'student_files_total': total_files,
+                                                })
+                                            else:
+                                                unprocessed_items.append((fn, un, sp))
+                                        pending_files = unprocessed_items
 
                             # --- SEQUENTIAL SINGLE-FILE FALLBACK (for remaining pending files) ---
                             for file_name, upload_name, src_path in pending_files:
@@ -582,9 +880,9 @@ class FileUploader:
                                 self._log('info', f"Uploading '{file_name}'...")
 
                                 def _do_upload():
-                                    # Check if already uploaded (e.g. from previous submit attempt before retry)
-                                    if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
-                                        self._log('info', f"File '{file_name}' detected in folder listing prior to submit — skipping duplicate submission.")
+                                    # Check destination page: if already uploaded (e.g. from a previous submit attempt before retry), skip
+                                    if not self._allow_duplicates and file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
+                                        self._log('info', f"[SKIP] '{file_name}' detected on the destination page prior to submit — already uploaded, skipping duplicate submission.")
                                         return True
 
                                     click_xpath(driver, wait, config['upload_tool_button_xpath'],
@@ -641,12 +939,15 @@ class FileUploader:
                                                     if sig in dialogs_before_submit:
                                                         continue  # stale, pre-existing dialog
                                                     text = (d.text or d.get_attribute('textContent') or '').lower()
-                                                    if 'malformed' in text and 'invalid file name' in text:
+                                                    if ('malformed' in text and 'invalid file name' in text) or 'cannot be uploaded' in text:
                                                         malformed_full = (d.text or d.get_attribute('textContent') or 'Malformed or invalid file name').strip()
                                                         ok_clicked = click_dialog_ok_button(driver, log_func=self._log)
                                                         if not ok_clicked:
                                                             dismiss_error_dialog(driver, log_func=self._log)
-                                                        wait.until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                        try:
+                                                            WebDriverWait(driver, 2.0).until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                        except Exception:
+                                                            pass
                                                         raise MalformedFileError(malformed_full)
                                                 except MalformedFileError:
                                                     raise
@@ -676,7 +977,10 @@ class FileUploader:
                                             if _up_vis:
                                                 unsupported_txt = (_up_vis[0].text or _up_vis[0].get_attribute('textContent') or 'Unsupported file type').strip()
                                                 dismiss_error_dialog(driver, log_func=self._log)
-                                                wait.until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                try:
+                                                    WebDriverWait(driver, 2.0).until(EC.element_to_be_clickable((By.XPATH, _upload_btn_xpath)))
+                                                except Exception:
+                                                    pass
                                                 raise UnsupportedFormatError(unsupported_txt)
                                         except (UnsupportedFormatError, MalformedFileError):
                                             raise
@@ -699,7 +1003,7 @@ class FileUploader:
                                                 (By.XPATH, _upload_btn_xpath)))
                                         except Exception:
                                             if file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log):
-                                                self._log('info', f"Upload widget timeout, but '{file_name}' verified present in folder listing.")
+                                                self._log('info', f"Upload widget timeout, but '{file_name}' verified present on the destination page — treating as successful.")
                                                 return True
                                             raise
                                     return got_popup_inner
@@ -726,31 +1030,26 @@ class FileUploader:
                                     }
                                     batch_logs.append(log_entry)
                                     category_uploaded_tracker.append({'fn': file_name, 'un': upload_name, 'sp': src_path, 'log_dict': log_entry})
-                                elif isinstance(upload_err, MalformedFileError):
+                                elif isinstance(upload_err, (MalformedFileError, UnsupportedFormatError)):
                                     files_done += 1
                                     bytes_done_overall += f_sz
-                                    self._log('warning', f"'{file_name}' rejected by target system as malformed or having an invalid file name: {upload_err}")
+                                    file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
+                                    if file_ext:
+                                        with FileUploader._global_cache_lock:
+                                            FileUploader._global_rejected_extensions.add(file_ext)
+                                        learning_engine.record_rejected_file_type(login_url, file_ext)
+                                        self._log('warning', f"[LEARNING] Learned rejected file format '.{file_ext}' for this portal. Future files with this format will be skipped upfront in 0.0s.")
+
+                                    is_unsup = isinstance(upload_err, UnsupportedFormatError)
+                                    action_name = 'skipped_unsupported' if is_unsup else 'skipped_malformed'
+                                    comment_name = f"Unsupported file format ({upload_err}) -- will not be retried." if is_unsup else f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried."
                                     batch_logs.append({
                                         'studentId':     student_id,
                                         'category':      category['name'],
                                         'fileName':      file_name,
                                         'uploadedAs':    upload_name,
-                                        'action':        'skipped_malformed',
-                                        'actionComment': f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried.",
-                                        'validation':    'skipped',
-                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
-                                    })
-                                elif isinstance(upload_err, UnsupportedFormatError):
-                                    files_done += 1
-                                    bytes_done_overall += f_sz
-                                    self._log('warning', f"'{file_name}' rejected by target system as an unsupported format: {upload_err}")
-                                    batch_logs.append({
-                                        'studentId':     student_id,
-                                        'category':      category['name'],
-                                        'fileName':      file_name,
-                                        'uploadedAs':    upload_name,
-                                        'action':        'skipped_unsupported',
-                                        'actionComment': f"Unsupported file format ({upload_err}) -- will not be retried.",
+                                        'action':        action_name,
+                                        'actionComment': comment_name,
                                         'validation':    'skipped',
                                         'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
                                     })
@@ -779,6 +1078,8 @@ class FileUploader:
                                     'files_total': total_files_overall,
                                     'bytes_done': bytes_done_overall,
                                     'total_bytes': total_bytes_overall,
+                                    'student_files_done': files_done,
+                                    'student_files_total': total_files,
                                 })
 
                             # --- IN-PLACE FINAL PAGE DUMP & VERIFICATION (for this category folder) ---
@@ -857,9 +1158,16 @@ class FileUploader:
                                             log_entry['actionComment'] = f"Rollback retry error: {describe_exception(re_err)}"
                                     else:
                                         # Table snapshot did not capture row, but the batch/single upload transaction was accepted and confirmed
-                                        log_entry['validation'] = 'uploaded_unverified'
-                                        log_entry['actionComment'] = "Uploaded (pending portal table indexing)"
-                                        self._log('info', f"Upload confirmed for '{fn}' in folder '{category['name'] or 'root'}' (pending portal background indexing).")
+                                        log_entry['action'] = 'failed'
+                                        log_entry['validation'] = 'missing_from_portal'
+                                        log_entry['actionComment'] = "Upload submission accepted, but file missing/dropped from portal table"
+                                        self._log('warning', f"Upload unverified: '{fn}' not found in folder '{category['name'] or 'root'}' after submission.")
+
+                            if portal_session:
+                                try:
+                                    portal_session.close()
+                                except Exception:
+                                    pass
 
                             # Return to parent target folder for next category
                             if not category.get('is_root'):
@@ -929,6 +1237,8 @@ class FileUploader:
                     'total_students': len(students),
                     'files_done': total_uploaded,
                     'files_total': total_files_overall,
+                    'bytes_done': bytes_done_overall,
+                    'total_bytes': total_bytes_overall,
                 })
             else:
                 # for/else: only runs if the loop finished all students without
@@ -940,11 +1250,16 @@ class FileUploader:
                     'total_students': len(students),
                     'files_done': total_uploaded,
                     'files_total': total_files_overall,
+                    'bytes_done': bytes_done_overall,
+                    'total_bytes': total_bytes_overall,
                 })
 
         finally:
-            if driver:
-                driver.quit()
+            try:
+                safe_quit_driver(driver, log_func=lambda m: self._log('debug', m))
+            except Exception:
+                pass
+            driver = None
             if os.path.isdir(tmp_upload_dir):
                 shutil.rmtree(tmp_upload_dir, ignore_errors=True)
 
@@ -990,6 +1305,7 @@ class FileUploader:
         target_folder_name: str,
         n_workers: int,
         devtools: bool = False,
+        allow_duplicates: bool = False,
         on_progress=None,
         abort_flag=None,
         log=None,
@@ -1018,10 +1334,15 @@ class FileUploader:
         if target_folder_name == NO_TARGET_FOLDER_LABEL:
             target_folder_name = ""
 
+        login_url = config.get('login_url', '')
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
+
         session_inputs = session_inputs or {
             'source_dir': source_dir,
             'target_folder_name': target_folder_name,
-            'login_url': config.get('login_url', ''),
+            'login_url': login_url,
         }
         session_data = SessionManager.start_session(MODULE_ID, session_inputs, total_items=total_count)
         completed_ids = SessionManager.get_all_completed_item_ids(MODULE_ID)
@@ -1164,6 +1485,7 @@ class FileUploader:
                     source_dir=source_dir,
                     target_folder_name=target_folder_name,
                     devtools=devtools,
+                    allow_duplicates=allow_duplicates,
                     on_progress=worker_progress,
                     abort_flag=_abort,
                     log=worker_log,
@@ -1495,6 +1817,18 @@ class FileUploader:
                 current_files = get_portal_files_in_current_table(driver, config, wait_timeout=1.5)
                 current_file_names_clean = {cf['name'].strip().lower(): cf['name'] for cf in current_files}
 
+                audit_session = None
+                audit_portal_hashes = {}
+                if current_files:
+                    try:
+                        audit_session = get_portal_requests_session(driver)
+                        self._log('info', f"[AUDIT] Verifying SHA-256 checksums concurrently for {len(current_files)} file(s) in '{folder_name}'...")
+                        audit_portal_hashes = compute_portal_folder_sha256_batch(
+                            driver, current_files, session=audit_session, max_workers=6, log_func=self._log
+                        )
+                    except Exception as be:
+                        self._log('debug', f"Audit SHA-256 batch notice: {be}")
+
                 expected_clean_map = {f.strip().lower(): f for f in expected_files}
                 expected_sanitized_clean_map = {sanitize_upload_filename(f).strip().lower(): f for f in expected_files}
 
@@ -1517,15 +1851,18 @@ class FileUploader:
                     un_lower = upload_name.strip().lower()
                     src_path = os.path.join(cat_info['path'], file_name)
 
-                    is_present = (
-                        fn_lower in current_file_names_clean
-                        or un_lower in current_file_names_clean
-                        or file_exists_in_listing(driver, file_name, config, upload_name=upload_name, local_path=src_path, log_func=self._log)
+                    is_present = file_exists_in_listing(
+                        driver, file_name, config,
+                        upload_name=upload_name,
+                        local_path=src_path,
+                        portal_file_hashes=audit_portal_hashes,
+                        session=audit_session,
+                        log_func=self._log
                     )
 
                     if is_present:
                         correct_verified += 1
-                        self._log('info', f"[AUDIT VERIFIED] '{file_name}' already exists in folder '{folder_name}' on portal — skipping upload.")
+                        self._log('info', f"[AUDIT VERIFIED] '{file_name}' verified present via SHA-256 in '{folder_name}' — skipping upload.")
                     else:
                         missing_files.append((file_name, upload_name, src_path))
 
@@ -1561,6 +1898,12 @@ class FileUploader:
                                 os.remove(tmp_path)
                             except OSError:
                                 pass
+
+                if audit_session:
+                    try:
+                        audit_session.close()
+                    except Exception:
+                        pass
 
                 # Return to target parent folder for next row
                 self._return_to_target_folder(driver, wait, config, files_docs_root_url, target_folder_name, student_id)
@@ -1697,6 +2040,10 @@ class FileUploader:
 
         login_url = config.get('login_url', '')
         domain_key = learning_engine.extract_domain(login_url)
+
+        with FileUploader._global_cache_lock:
+            FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
         effective_devtools = learning_engine.resolve_devtools(devtools, domain_key, log_func=self._log)
         headless = settings.get("headless", False)
         if headless:
@@ -1770,11 +2117,8 @@ class FileUploader:
                 })
 
         finally:
-            if driver:
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
+            safe_quit_driver(driver)
+            driver = None
 
         return {
             'students_audited': students_audited,
@@ -1789,18 +2133,23 @@ class FileUploader:
         log_file_path = find_latest_run_log(source_dir, "uploads_execution_log", ".csv")
         if not log_file_path or not os.path.isfile(log_file_path):
             return {'uploaded': 0, 'failed': 0, 'skipped_unsupported': 0, 'skipped_malformed': 0, 'students': 0}
-        uploaded = failed = skipped_unsupported = skipped_malformed = 0
+        uploaded = failed = skipped_unsupported = skipped_malformed = skipped_duplicate = 0
         per_student: dict = {}
         try:
             with open(log_file_path, mode='r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     sid = row.get('studentId', '-')
-                    per_student.setdefault(sid, {'uploaded': 0, 'failed': 0, 'skipped_unsupported': 0, 'skipped_malformed': 0})
+                    per_student.setdefault(sid, {'uploaded': 0, 'failed': 0, 'skipped_unsupported': 0, 'skipped_malformed': 0, 'skipped_duplicate': 0})
                     action = row.get('action')
+                    validation = row.get('validation', '')
                     if action == 'uploaded':
                         uploaded += 1
                         per_student[sid]['uploaded'] += 1
+                    elif action == 'skipped' or validation == 'skipped_duplicate':
+                        # File was found already on the destination page — not an error
+                        skipped_duplicate += 1
+                        per_student[sid]['skipped_duplicate'] += 1
                     elif action == 'skipped_unsupported':
                         skipped_unsupported += 1
                         per_student[sid]['skipped_unsupported'] += 1
@@ -1815,6 +2164,7 @@ class FileUploader:
         return {
             'uploaded': uploaded,
             'failed': failed,
+            'skipped_duplicate': skipped_duplicate,
             'skipped_unsupported': skipped_unsupported,
             'skipped_malformed': skipped_malformed,
             'students': len(per_student),
@@ -1835,10 +2185,7 @@ class FileUploader:
                 driver_alive = True
             except Exception:
                 driver_alive = False
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
+                safe_quit_driver(driver)
                 driver = None
 
         if not driver_alive:
@@ -2114,6 +2461,14 @@ class FileUploader:
 
             if confirmed:
                 all_folders = get_all_portal_folder_details(driver, config)
+                if all_folders:
+                    with FileUploader._global_cache_lock:
+                        for f in all_folders:
+                            FileUploader._global_known_folders.add(f['name'].strip().lower())
+                    try:
+                        learning_engine.record_global_folders(files_docs_root_url, [f['name'] for f in all_folders])
+                    except Exception:
+                        pass
                 self._log('debug', f"[NAV] CONFIRMED inside '{target_folder_name}'. Subfolders: {[f['raw'] for f in all_folders]}")
                 return
 

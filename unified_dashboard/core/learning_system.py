@@ -253,6 +253,84 @@ class LearningEngine:
                 .get(strategy_key, default)
             )
 
+    def record_global_folders(self, url: str, folder_names):
+        """Record multiple folder names as known to exist globally on the target domain.
+        Because SIS folder templates are system-wide, a folder existing for one student
+        exists for all students."""
+        if not folder_names:
+            return
+        domain = self.extract_domain(url)
+        with self._lock:
+            profile = self._get_domain_profile(domain)
+            strategies = profile.setdefault("strategies", {})
+            current_folders = set(strategies.get("known_global_folders", []))
+            for f in folder_names:
+                f_clean = f.strip().lower()
+                if f_clean:
+                    current_folders.add(f_clean)
+            strategies["known_global_folders"] = sorted(list(current_folders))
+        self.save()
+
+    def record_global_folder(self, url: str, folder_name: str):
+        """Record a single folder name as known to exist globally on target domain."""
+        if folder_name:
+            self.record_global_folders(url, [folder_name])
+
+    def is_global_folder_known(self, url: str, folder_name: str) -> bool:
+        """Check if folder_name is known to exist globally for this domain."""
+        if not folder_name:
+            return False
+        known = self.get_known_global_folders(url)
+        return folder_name.strip().lower() in known
+
+    def get_known_global_folders(self, url: str) -> set:
+        """Return set of lower-cased folder names known to exist globally for domain."""
+        domain = self.extract_domain(url)
+        with self._lock:
+            raw = (
+                self._data.get("domain_profiles", {})
+                .get(domain, {})
+                .get("strategies", {})
+                .get("known_global_folders", [])
+            )
+            return set(raw)
+
+    def record_rejected_file_type(self, url: str, ext: str):
+        """Record a file extension that was rejected by the portal (e.g. 'html', 'exe').
+        Future files with this extension will be skipped upfront in 0.0s."""
+        if not ext:
+            return
+        ext_clean = ext.strip().lower().lstrip('.')
+        if not ext_clean:
+            return
+        domain = self.extract_domain(url)
+        with self._lock:
+            profile = self._get_domain_profile(domain)
+            strategies = profile.setdefault("strategies", {})
+            rejected = set(strategies.get("rejected_file_types", []))
+            rejected.add(ext_clean)
+            strategies["rejected_file_types"] = sorted(list(rejected))
+        self.save()
+
+    def is_file_type_rejected(self, url: str, ext: str) -> bool:
+        """Check if file extension was previously rejected by the portal."""
+        if not ext:
+            return False
+        ext_clean = ext.strip().lower().lstrip('.')
+        return ext_clean in self.get_rejected_file_types(url)
+
+    def get_rejected_file_types(self, url: str) -> set:
+        """Return set of lower-cased file extensions rejected by the portal."""
+        domain = self.extract_domain(url)
+        with self._lock:
+            raw = (
+                self._data.get("domain_profiles", {})
+                .get(domain, {})
+                .get("strategies", {})
+                .get("rejected_file_types", [])
+            )
+            return set(raw)
+
     # ------------------------------------------------------------------
     # Timing & Latency Learning
     # ------------------------------------------------------------------

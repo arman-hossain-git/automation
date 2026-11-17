@@ -138,6 +138,8 @@ class BaseToolWidget(QWidget):
         # ── Metric State (mirrors BaseToolFrame) ───────────────────────
         self.total_students = 0
         self.students_traversed = 0
+        self.total_rows = 0
+        self.rows_done = 0
         self.current_student_id = "-"
         self.current_category = "-"
         self.files_done = 0
@@ -197,17 +199,17 @@ class BaseToolWidget(QWidget):
 
         # ── 1. Header Row ──────────────────────────────────────────────
         hdr_frame = QFrame()
-        hdr_frame.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px; padding: 10px;")
+        hdr_frame.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px; padding: 4px 8px;")
         h_layout = QHBoxLayout(hdr_frame)
-        h_layout.setContentsMargins(12, 6, 12, 6)
+        h_layout.setContentsMargins(10, 4, 10, 4)
 
         title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
+        title_vbox.setSpacing(1)
         lbl_title = QLabel(self.title_text)
-        lbl_title.setStyleSheet(f"font-size: 17px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
+        lbl_title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
         self.lbl_desc = QLabel(self.description_text)
         self.lbl_desc.setWordWrap(True)
-        self.lbl_desc.setStyleSheet(f"font-size: 12px; color: {TEXT_SECONDARY}; border: none;")
+        self.lbl_desc.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY}; border: none;")
         title_vbox.addWidget(lbl_title)
         title_vbox.addWidget(self.lbl_desc)
 
@@ -233,44 +235,110 @@ class BaseToolWidget(QWidget):
 
         # ── 3. Bottom Pinned Action Bar ────────────────────────────────
         bot_bar = QFrame()
-        bot_bar.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px; padding: 8px;")
-        b_layout = QHBoxLayout(bot_bar)
-        b_layout.setContentsMargins(12, 8, 12, 8)
-        b_layout.setSpacing(10)
+        bot_bar.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px; padding: 6px 10px;")
+        bot_layout = QHBoxLayout(bot_bar)
+        bot_layout.setContentsMargins(10, 4, 10, 4)
+        bot_layout.setSpacing(12)
+
+        # Left: Controls (Start, Pause, Stop)
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(6)
 
         self.btn_start = QPushButton("▶  Start Automation")
         self.btn_start.setObjectName("btn_success")
         self.btn_start.setCursor(Qt.PointingHandCursor)
         self.btn_start.clicked.connect(self.start_automation)
-        b_layout.addWidget(self.btn_start)
+        controls_layout.addWidget(self.btn_start)
 
         self.btn_pause = QPushButton("⏸  Pause")
         self.btn_pause.setObjectName("btn_warning")
         self.btn_pause.setCursor(Qt.PointingHandCursor)
         self.btn_pause.setEnabled(False)
         self.btn_pause.clicked.connect(self.toggle_pause)
-        b_layout.addWidget(self.btn_pause)
+        controls_layout.addWidget(self.btn_pause)
 
         self.btn_stop = QPushButton("⏹  Stop")
         self.btn_stop.setObjectName("btn_danger")
         self.btn_stop.setCursor(Qt.PointingHandCursor)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.stop_automation)
-        b_layout.addWidget(self.btn_stop)
+        controls_layout.addWidget(self.btn_stop)
 
-        b_layout.addSpacing(10)
+        bot_layout.addLayout(controls_layout)
 
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        b_layout.addWidget(self.progress_bar, stretch=1)
+        # Vertical separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet(f"color: {BORDER_SUBTLE};")
+        bot_layout.addWidget(sep)
 
-        self.lbl_progress_percent = QLabel("0%")
-        self.lbl_progress_percent.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {TEXT_PRIMARY}; border: none; min-width: 45px;")
-        b_layout.addWidget(self.lbl_progress_percent)
+        # Right: 4 Dedicated Sleek Progress Bars in a 2x2 Grid (Students, Rows, Files, Size)
+        pb_grid = QGridLayout()
+        pb_grid.setContentsMargins(2, 0, 2, 0)
+        pb_grid.setHorizontalSpacing(14)
+        pb_grid.setVerticalSpacing(4)
 
+        def _make_progress_cell(icon_text, chunk_color):
+            cell = QWidget()
+            cl = QHBoxLayout(cell)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.setSpacing(6)
+
+            title = QLabel(icon_text)
+            title.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {TEXT_SECONDARY}; border: none;")
+            title.setFixedWidth(75)
+
+            pb = QProgressBar()
+            pb.setRange(0, 100)
+            pb.setValue(0)
+            pb.setTextVisible(False)
+            pb.setFixedHeight(8)
+            pb.setStyleSheet(f"""
+                QProgressBar {{
+                    background-color: {BG_CARD_ALT};
+                    border: 1px solid {BORDER_SUBTLE};
+                    border-radius: 4px;
+                    max-height: 8px;
+                    min-height: 8px;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {chunk_color};
+                    border-radius: 3px;
+                }}
+            """)
+
+            val = QLabel("0 / 0 (0.0%)")
+            val.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {TEXT_PRIMARY}; border: none;")
+            val.setMinimumWidth(130)
+            val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            cl.addWidget(title)
+            cl.addWidget(pb, stretch=1)
+            cl.addWidget(val)
+            return pb, val, cell
+
+        self.pb_students, self.lbl_pb_students, w_stu = _make_progress_cell("🎓 Students:", "#3b82f6")
+        self.pb_files,    self.lbl_pb_files,    w_fil = _make_progress_cell("📁 Files:",    "#10b981")
+        self.pb_rows,     self.lbl_pb_rows,     w_row = _make_progress_cell("📑 Rows:",     "#a855f7")
+        self.pb_size,     self.lbl_pb_size,     w_siz = _make_progress_cell("💾 Size:",     "#06b6d4")
+
+        pb_grid.addWidget(w_stu, 0, 0)
+        pb_grid.addWidget(w_fil, 0, 1)
+        pb_grid.addWidget(w_row, 1, 0)
+        pb_grid.addWidget(w_siz, 1, 1)
+
+        bot_layout.addLayout(pb_grid, stretch=1)
         root_layout.addWidget(bot_bar)
+
+        # Backward-compatibility stubs / aliases
+        self.bar_lbl_students = self.lbl_pb_students
+        self.bar_lbl_rows     = self.lbl_pb_rows
+        self.bar_lbl_files    = self.lbl_pb_files
+        self.bar_lbl_size     = self.lbl_pb_size
+
+        self.progress_bar = QProgressBar()
+        self.lbl_progress_percent = QLabel("0%")
 
     # ------------------------------------------------------------------
     # Configuration Tab Construction
@@ -387,13 +455,15 @@ class BaseToolWidget(QWidget):
             grid.addWidget(val, row, col_offset * 2 + 1, Qt.AlignTop)
             return val
 
-        # Left column – Workload & Volume Metrics
-        self.kpi_students         = _make_kpi_row(kpi_grid, 0, 0, "Students / Items Traversed:")
-        self.kpi_files_done       = _make_kpi_row(kpi_grid, 1, 0, "Files / Tasks Processed:")
-        self.kpi_data_volume      = _make_kpi_row(kpi_grid, 2, 0, "Data Volume Processed:")
-        self.kpi_current_student  = _make_kpi_row(kpi_grid, 3, 0, "Current Student ID:")
-        self.kpi_current_category = _make_kpi_row(kpi_grid, 4, 0, "Current Stage / Folder:")
-        self.kpi_current_file     = _make_kpi_row(kpi_grid, 5, 0, "In-Flight File & Size:")
+        # Left column – Workload & Volume Metrics (Dedicated fields for Students, Rows, Files, Size)
+        self.kpi_students         = _make_kpi_row(kpi_grid, 0, 0, "Students Processed:")
+        self.kpi_rows             = _make_kpi_row(kpi_grid, 1, 0, "CSV Rows / Records:")
+        self.kpi_files_done       = _make_kpi_row(kpi_grid, 2, 0, "Total Files Processed:")
+        self.kpi_student_files    = _make_kpi_row(kpi_grid, 3, 0, "Current Student Files:")
+        self.kpi_data_volume      = _make_kpi_row(kpi_grid, 4, 0, "Data Volume / Size:")
+        self.kpi_current_student  = _make_kpi_row(kpi_grid, 5, 0, "Current Student ID:")
+        self.kpi_current_category = _make_kpi_row(kpi_grid, 6, 0, "Current Stage / Folder:")
+        self.kpi_current_file     = _make_kpi_row(kpi_grid, 7, 0, "In-Flight File & Size:")
 
         # Right column – Performance & Time KPIs
         self.kpi_start_time      = _make_kpi_row(kpi_grid, 0, 1, "Automation Start:")
@@ -402,6 +472,8 @@ class BaseToolWidget(QWidget):
         self.kpi_transfer_speed  = _make_kpi_row(kpi_grid, 3, 1, "Transfer Throughput:")
         self.kpi_avg_speed       = _make_kpi_row(kpi_grid, 4, 1, "Item Processing Speed:")
         self.kpi_eta             = _make_kpi_row(kpi_grid, 5, 1, "Est. Remaining & ETA:")
+        self.kpi_workers         = _make_kpi_row(kpi_grid, 6, 1, "Parallel Workers:")
+        self.kpi_errors          = _make_kpi_row(kpi_grid, 7, 1, "Errors Encountered:")
 
         # Column sizing
         kpi_grid.setColumnMinimumWidth(0, 160)
@@ -646,11 +718,18 @@ class BaseToolWidget(QWidget):
                 self.active_work_start_time = datetime.datetime.now()
 
         if kwargs.get("files_total") is not None:
-            self.files_total = int(kwargs["files_total"])
+            new_ft = int(kwargs["files_total"])
+            self.files_total = max(self.files_total, new_ft)
         if kwargs.get("total_bytes") is not None:
-            self.total_bytes = int(kwargs["total_bytes"])
+            new_tb = int(kwargs["total_bytes"])
+            self.total_bytes = max(self.total_bytes, new_tb)
         if kwargs.get("bytes_done") is not None:
-            self.bytes_done = int(kwargs["bytes_done"])
+            new_bd = int(kwargs["bytes_done"])
+            is_upload_mode = (self.tool_mode == "upload") or (self.total_bytes > 0)
+            if is_upload_mode:
+                self.bytes_done = max(self.bytes_done, new_bd)
+            else:
+                self.bytes_done = new_bd
             if is_skipped:
                 self.bytes_base_offset = self.bytes_done
             elif self.bytes_base_offset is None:
@@ -682,7 +761,20 @@ class BaseToolWidget(QWidget):
             fn = kwargs.get("current_file_name") or self.current_file_name
             spd = self.rolling_speed_bps if self.rolling_speed_bps > 0 else self.transfer_rate_bps
             session_bytes = max(0, self.bytes_done - (self.bytes_base_offset or 0))
-            tot_lbl = (
+            # Combined total-progress label: ALL dimensions
+            _tl_parts = []
+            if self.total_students > 0:
+                _tl_parts.append(
+                    f"{self.students_traversed}/{self.total_students} students"
+                )
+            if self.files_total > 0:
+                _tl_files = self.total_files_uploaded if is_upload else self.files_done
+                _tl_parts.append(f"{_tl_files}/{self.files_total} files")
+            if self.total_bytes > 0:
+                _tl_parts.append(
+                    f"{format_bytes(self.bytes_done)}/{format_bytes(self.total_bytes)}"
+                )
+            tot_lbl = "  |  ".join(_tl_parts) if _tl_parts else (
                 f"Total: {format_bytes(self.bytes_done)} / {format_bytes(self.total_bytes)}"
                 if self.total_bytes > 0 else f"Total: {format_bytes(self.bytes_done)}"
             )
@@ -698,7 +790,19 @@ class BaseToolWidget(QWidget):
                 self.telemetry_graph.lbl_total_progress.setText(tot_lbl)
         elif not is_upload and (self.total_students > 0 or self.students_traversed > 0):
             session_items = max(0, self.students_traversed - (self.students_base_offset or 0))
-            tot_lbl = (
+            # Combined total-progress label: ALL dimensions
+            _tl_parts2 = []
+            if self.total_students > 0:
+                _tl_parts2.append(
+                    f"{self.students_traversed}/{self.total_students} students"
+                )
+            if self.files_total > 0:
+                _tl_parts2.append(f"{self.files_done}/{self.files_total} files")
+            if self.total_bytes > 0:
+                _tl_parts2.append(
+                    f"{format_bytes(self.bytes_done)}/{format_bytes(self.total_bytes)}"
+                )
+            tot_lbl = "  |  ".join(_tl_parts2) if _tl_parts2 else (
                 f"Total: {self.students_traversed}/{self.total_students}"
                 if self.total_students > 0 else f"Total: {self.students_traversed} items"
             )
@@ -718,79 +822,153 @@ class BaseToolWidget(QWidget):
             elif is_skipped:
                 self.telemetry_graph.lbl_total_progress.setText(tot_lbl)
 
-        # Progress bar logic:
-        #   upload mode (tool_mode=="upload" or total_bytes>0): byte-based
-        #   download mode: student-based
+        if kwargs.get("total_rows") is not None:
+            self.total_rows = int(kwargs["total_rows"])
+        if kwargs.get("rows_done") is not None:
+            self.rows_done = int(kwargs["rows_done"])
+        elif kwargs.get("students_traversed") is not None and self.total_rows > 0:
+            self.rows_done = int(kwargs["students_traversed"])
+
+        if kwargs.get("student_files_done") is not None:
+            self.student_files_done = int(kwargs["student_files_done"])
+        if kwargs.get("student_files_total") is not None:
+            self.student_files_total = int(kwargs["student_files_total"])
+        if kwargs.get("total_files_uploaded") is not None:
+            self.total_files_uploaded = max(self.total_files_uploaded, int(kwargs["total_files_uploaded"]))
+        elif kwargs.get("files_done") is not None:
+            if is_upload:
+                self.total_files_uploaded = max(self.total_files_uploaded, int(kwargs["files_done"]))
+            else:
+                self.total_files_uploaded = int(kwargs["files_done"])
+
+        # Determine primary progress metric for the visual progress bar:
+        # Priority 1: Data transfer bytes (if total_bytes > 0)
+        # Priority 2: Files total (if files_total > 0)
+        # Priority 3: Students / Rows (if total_students > 0)
+        cur_f = max(self.total_files_uploaded, self.files_done)
+        tot_r = self.total_rows if self.total_rows > 0 else self.total_students
+        cur_r = self.rows_done if self.rows_done > 0 else self.students_traversed
+
         is_upload = (self.tool_mode == "upload") or (self.total_bytes > 0)
         if is_upload and self.total_bytes > 0:
-            # Byte-based progress for upload
-            pb_max = 1000  # scale to avoid int overflow on large files
-            pb_val = int(min(self.bytes_done / self.total_bytes, 1.0) * pb_max) if self.total_bytes > 0 else 0
-            pct = min(100, max(0, int(pb_val / pb_max * 100))) if pb_max > 0 else 0
-            new_max = pb_max
-            current_val = pb_val
-            badge_cur = format_bytes(self.bytes_done)
-            badge_tot = format_bytes(self.total_bytes)
+            pb_max = 1000
+            pb_val = int(min(self.bytes_done / self.total_bytes, 1.0) * pb_max)
+            pct = min(100, max(0, int(self.bytes_done / self.total_bytes * 100)))
+        elif is_upload and self.files_total > 0:
+            pb_max = self.files_total
+            pb_val = min(cur_f, pb_max)
+            pct = min(100, max(0, int(cur_f / self.files_total * 100)))
         elif self.total_students > 0:
-            new_max = self.total_students
-            current_val = self.students_traversed
-            pct = min(100, max(0, int(current_val / new_max * 100))) if new_max > 0 else 0
-            badge_cur = str(current_val)
-            badge_tot = str(new_max)
-        elif self.files_total > 0:
-            new_max = self.files_total
-            current_val = self.files_done
-            pct = min(100, max(0, int(current_val / new_max * 100))) if new_max > 0 else 0
-            badge_cur = str(current_val)
-            badge_tot = str(new_max)
+            pb_max = self.total_students
+            pb_val = min(self.students_traversed, pb_max)
+            pct = min(100, max(0, int(self.students_traversed / self.total_students * 100)))
+        elif tot_r > 0:
+            pb_max = tot_r
+            pb_val = min(cur_r, pb_max)
+            pct = min(100, max(0, int(cur_r / tot_r * 100)))
         else:
-            new_max = self.total_items if self.total_items > 0 else 0
-            current_val = self.items_processed
-            pct = min(100, max(0, int(current_val / new_max * 100))) if new_max > 0 else 0
-            badge_cur = str(current_val)
-            badge_tot = str(new_max)
+            pb_max = max(1, self.total_items)
+            pb_val = min(self.items_processed, pb_max)
+            pct = min(100, max(0, int(self.items_processed / pb_max * 100)))
 
-        if new_max > 0 and self.progress_bar.maximum() != new_max:
-            self.progress_bar.setMaximum(new_max)
-
-        if new_max > 0:
-            self.progress_bar.setValue(min(current_val, new_max))
+        # Backward compatibility primary progress bar
+        if pb_max > 0 and self.progress_bar.maximum() != pb_max:
+            self.progress_bar.setMaximum(pb_max)
+        if pb_max > 0:
+            self.progress_bar.setValue(min(pb_val, pb_max))
             self.lbl_progress_percent.setText(f"{pct}%")
 
-            # Update top-right status badge
-            if self.is_running:
-                if current_val >= new_max and new_max > 0:
-                    self.badge_status.set_variant("success", f"Completed {badge_cur}/{badge_tot} (100%)")
-                else:
-                    self.badge_status.set_variant("success", f"Processing {badge_cur}/{badge_tot} ({pct}%)")
+        # Update the 4 dedicated progress bars:
+        # 1. Students
+        if hasattr(self, 'pb_students'):
+            if self.total_students > 0:
+                self.pb_students.setMaximum(self.total_students)
+                self.pb_students.setValue(min(self.students_traversed, self.total_students))
+                pct_s = (self.students_traversed / self.total_students) * 100
+                self.lbl_pb_students.setText(f"{self.students_traversed} / {self.total_students} ({pct_s:.1f}%)")
+            else:
+                self.pb_students.setMaximum(max(1, self.students_traversed))
+                self.pb_students.setValue(self.students_traversed)
+                self.lbl_pb_students.setText(f"{self.students_traversed}")
+
+        # 2. Rows
+        if hasattr(self, 'pb_rows'):
+            if tot_r > 0:
+                self.pb_rows.setMaximum(tot_r)
+                self.pb_rows.setValue(min(cur_r, tot_r))
+                pct_r = (cur_r / tot_r) * 100
+                self.lbl_pb_rows.setText(f"{cur_r} / {tot_r} ({pct_r:.1f}%)")
+            else:
+                self.pb_rows.setMaximum(max(1, cur_r))
+                self.pb_rows.setValue(cur_r)
+                self.lbl_pb_rows.setText(f"{cur_r}")
+
+        # 3. Files
+        if hasattr(self, 'pb_files'):
+            if self.files_total > 0:
+                self.pb_files.setMaximum(self.files_total)
+                self.pb_files.setValue(min(cur_f, self.files_total))
+                pct_f = (cur_f / self.files_total) * 100
+                self.lbl_pb_files.setText(f"{cur_f} / {self.files_total} ({pct_f:.1f}%)")
+            elif cur_f > 0:
+                self.pb_files.setMaximum(cur_f)
+                self.pb_files.setValue(cur_f)
+                self.lbl_pb_files.setText(f"{cur_f} files")
+            else:
+                self.pb_files.setMaximum(1)
+                self.pb_files.setValue(0)
+                self.lbl_pb_files.setText("-")
+
+        # 4. Size
+        if hasattr(self, 'pb_size'):
+            if self.total_bytes > 0:
+                self.pb_size.setMaximum(1000)
+                sz_val = int(min(self.bytes_done / self.total_bytes, 1.0) * 1000)
+                self.pb_size.setValue(sz_val)
+                pct_b = (self.bytes_done / self.total_bytes) * 100
+                self.lbl_pb_size.setText(f"{format_bytes(self.bytes_done)} / {format_bytes(self.total_bytes)} ({pct_b:.1f}%)")
+            elif self.bytes_done > 0:
+                self.pb_size.setMaximum(1)
+                self.pb_size.setValue(1)
+                self.lbl_pb_size.setText(f"{format_bytes(self.bytes_done)}")
+            else:
+                self.pb_size.setMaximum(1)
+                self.pb_size.setValue(0)
+                self.lbl_pb_size.setText("-")
+
+        # Update top-right status badge
+        if self.is_running:
+            badge_parts = []
+            if self.total_students > 0:
+                badge_parts.append(f"{self.students_traversed}/{self.total_students} students")
+            if tot_r > 0 and tot_r != self.total_students:
+                badge_parts.append(f"{cur_r}/{tot_r} rows")
+            if self.files_total > 0:
+                badge_parts.append(f"{cur_f}/{self.files_total} files")
+            if self.total_bytes > 0:
+                badge_parts.append(f"{format_bytes(self.bytes_done)}/{format_bytes(self.total_bytes)}")
+            if not badge_parts:
+                badge_parts.append(f"{pb_val}/{pb_max}")
+            badge_summary = " · ".join(badge_parts)
+
+            is_done = (pct >= 100)
+            verb = "Completed" if is_done else "Processing"
+            self.badge_status.set_variant("success", f"{verb} ({pct}%)  ·  {badge_summary}")
 
         # Refresh grid labels on the Qt thread
         self._refresh_kpi_display()
 
     def _refresh_kpi_display(self):
-        """Synchronously update all 12 KPI grid labels from current metric state."""
+        """Synchronously update all KPI grid labels from current metric state."""
         try:
-            is_upload = (self.tool_mode == "upload") or (self.total_bytes > 0)
-
-            # 1. Students / Items Traversed
+            # 1. Students Processed
             session_items = max(0, self.students_traversed - (self.students_base_offset or 0))
             if self.total_students > 0:
-                pct = (self.students_traversed / self.total_students) * 100
-                st_part = f"{self.students_traversed}/{self.total_students} ({pct:.1f}%)"
+                pct_s = (self.students_traversed / self.total_students) * 100
+                st_part = f"{self.students_traversed} / {self.total_students} ({pct_s:.1f}%)"
                 if (self.students_base_offset or 0) > 0 and session_items > 0:
                     st_part += f" [+{session_items}]"
-                if is_upload:
-                    # Upload: {students done}/{Total Students} and {files uploaded}/{total files in storage}
-                    if self.files_total > 0:
-                        files_pct = (self.total_files_uploaded / self.files_total) * 100
-                        self.kpi_students.setText(
-                            f"{st_part} and {self.total_files_uploaded}/{self.files_total} files ({files_pct:.1f}%)"
-                        )
-                    else:
-                        self.kpi_students.setText(f"{st_part} and {self.total_files_uploaded} files")
-                else:
-                    # Download: {students done}/{Total Students}
-                    self.kpi_students.setText(st_part)
+                self.kpi_students.setText(st_part)
             elif self.students_traversed > 0:
                 if (self.students_base_offset or 0) > 0 and session_items > 0:
                     self.kpi_students.setText(f"{self.students_traversed} [+{session_items}]")
@@ -799,31 +977,50 @@ class BaseToolWidget(QWidget):
             else:
                 self.kpi_students.setText("0")
 
-            # 2. Files / Tasks Processed:
-            # Upload: {files for a student uploaded}/{Total files for that Student}
-            # Download: {files for a student downloaded}/{Total files for that Student}
-            if self.student_files_total > 0:
-                f_pct = (self.student_files_done / self.student_files_total) * 100
-                self.kpi_files_done.setText(
-                    f"{self.student_files_done}/{self.student_files_total} ({f_pct:.1f}%)"
-                )
-            elif self.student_files_done > 0:
-                self.kpi_files_done.setText(str(self.student_files_done))
-            elif is_upload or self.tool_mode == "download":
-                self.kpi_files_done.setText("0/0")
+            # 2. CSV Rows / Records
+            tot_r = self.total_rows if self.total_rows > 0 else self.total_students
+            cur_r = self.rows_done if self.rows_done > 0 else self.students_traversed
+            if tot_r > 0:
+                pct_r = (cur_r / tot_r) * 100
+                self.kpi_rows.setText(f"{cur_r} / {tot_r} ({pct_r:.1f}%)")
+            elif cur_r > 0:
+                self.kpi_rows.setText(str(cur_r))
+            else:
+                self.kpi_rows.setText("-")
+
+            # 3. Total Files Processed
+            cur_f = max(self.total_files_uploaded, self.files_done)
+            if self.files_total > 0:
+                pct_f = (cur_f / self.files_total) * 100
+                self.kpi_files_done.setText(f"{cur_f} / {self.files_total} files ({pct_f:.1f}%)")
+            elif cur_f > 0:
+                self.kpi_files_done.setText(f"{cur_f} files")
+            elif self.tool_mode == "upload" or self.tool_mode == "download":
+                self.kpi_files_done.setText("0 / 0 files")
             else:
                 self.kpi_files_done.setText("-")
 
-            # 3. Data Volume
+            # 4. Current Student Files
+            if self.student_files_total > 0:
+                pct_sf = (self.student_files_done / self.student_files_total) * 100
+                self.kpi_student_files.setText(f"{self.student_files_done} / {self.student_files_total} files ({pct_sf:.1f}%)")
+            elif self.student_files_done > 0:
+                self.kpi_student_files.setText(f"{self.student_files_done} files")
+            elif self.tool_mode == "upload" or self.tool_mode == "download":
+                self.kpi_student_files.setText("0 / 0 files")
+            else:
+                self.kpi_student_files.setText("-")
+
+            # 5. Data Volume / Size
             if self.total_bytes > 0:
-                v_pct = (self.bytes_done / self.total_bytes) * 100
+                pct_b = (self.bytes_done / self.total_bytes) * 100
                 self.kpi_data_volume.setText(
-                    f"{format_bytes(self.bytes_done)} / {format_bytes(self.total_bytes)} ({v_pct:.1f}%)"
+                    f"{format_bytes(self.bytes_done)} / {format_bytes(self.total_bytes)} ({pct_b:.1f}%)"
                 )
             elif self.bytes_done > 0:
                 self.kpi_data_volume.setText(format_bytes(self.bytes_done))
             else:
-                self.kpi_data_volume.setText("- (N/A for form submission)")
+                self.kpi_data_volume.setText("- (N/A)")
 
             # 4. Current labels
             self.kpi_current_student.setText(self.current_student_id)
@@ -1006,27 +1203,36 @@ class BaseToolWidget(QWidget):
             if total > self.total_items or self.total_items <= 1:
                 self.total_items = total
 
-        # If student task, update students_traversed
-        if self.total_students > 0 or (self.files_total <= 0 and total > 1):
+        # Determine whether this call is student-based or file-based.
+        # Guard: if total matches the known files_total, treat it as a file
+        # progress call — never write file counts into student_traversed/total_students.
+        _is_file_call = (self.files_total > 0 and total == self.files_total)
+
+        if not _is_file_call and (self.total_students > 0 or (self.files_total <= 0 and total > 1)):
+            # Student / record level progress
             if total > 1 and (self.total_students <= 1 or total > self.total_students):
                 self.total_students = total
             self.students_traversed = current
             effective_max = self.total_students
             effective_cur = self.students_traversed
         elif self.files_total > 0:
+            # File level progress — do NOT touch students_traversed / total_students
             effective_max = self.files_total
             effective_cur = self.files_done
         else:
             effective_max = max(self.total_items, total, 1)
             effective_cur = current
 
+        # Progress bar and % label — the badge is updated by update_kpis which
+        # has richer multi-dimension data; skip the single-dim badge write here
+        # to avoid overwriting it with a stale value.
         if effective_max > 0 and self.progress_bar.maximum() != effective_max:
             self.progress_bar.setMaximum(effective_max)
         self.progress_bar.setValue(min(effective_cur, effective_max))
         pct = min(100, max(0, int(effective_cur / effective_max * 100))) if effective_max > 0 else 0
         self.lbl_progress_percent.setText(f"{pct}%")
-        if self.is_running and effective_max > 0:
-            self.badge_status.set_variant("success", f"Processing {effective_cur}/{effective_max} ({pct}%)")
+        # Note: badge_status is NOT updated here — update_kpis (via _handle_kpi_event)
+        # already writes the full multi-dimension badge for every typed KPI event.
 
     @Slot(float, int, str)
     def update_telemetry(self, speed_bps: float, cum_bytes: int, file_name: str = ""):
@@ -1046,13 +1252,15 @@ class BaseToolWidget(QWidget):
         t = kpi_dict.get("type")
         if t == "init_totals":
             tot_st = kpi_dict.get("total_students", self.total_students)
+            tot_rows = kpi_dict.get("total_rows", tot_st)
             tot_fl = kpi_dict.get("total_files", self.files_total)
             tot_bytes = kpi_dict.get("total_bytes", 0)
-            # Detect upload mode: uploader pre-scans and provides total_bytes > 0
-            if tot_bytes > 0:
+            if tot_bytes > 0 or tot_fl > 0:
                 self.tool_mode = "upload"
+            self.total_rows = tot_rows
             self.update_kpis(
                 total_students=tot_st,
+                total_rows=tot_rows,
                 files_total=tot_fl,
                 total_bytes=tot_bytes,
             )
@@ -1065,7 +1273,16 @@ class BaseToolWidget(QWidget):
                 self.progress_bar.setMaximum(total)
             self.progress_bar.setValue(0)
             self.lbl_progress_percent.setText("0%")
-            self.badge_status.set_variant("success", f"Processing 0/{total} (0%)")
+            # Multi-dimension badge on run initialisation
+            _init_parts = []
+            if tot_st > 0:
+                _init_parts.append(f"0/{tot_st} students")
+            if tot_fl > 0:
+                _init_parts.append(f"0/{tot_fl} files")
+            if tot_bytes > 0:
+                _init_parts.append(f"0 B/{format_bytes(tot_bytes)}")
+            _init_summary = "  |  ".join(_init_parts) if _init_parts else f"0/{total}"
+            self.badge_status.set_variant("success", f"Processing (0%)  ·  {_init_summary}")
         elif t == "total":
             tot = max(1, kpi_dict.get("total", self.total_students))
             self.total_items = tot
@@ -1102,33 +1319,40 @@ class BaseToolWidget(QWidget):
         elif t == "category":
             self.update_kpis(current_category=kpi_dict.get("name", "-"))
         elif t == "files_total":
-            tot = kpi_dict.get("total", self.files_total)
-            # student_files: per-student file total (sent alongside global total)
-            stud_tot = kpi_dict.get("student_files", tot)
+            stud_tot = kpi_dict.get("student_files", kpi_dict.get("total", 0))
             self.student_files_total = stud_tot
             self.student_files_done = 0   # reset per-student counter for new student
-            self.total_items = max(self.total_items, tot)
-            self.update_kpis(
-                files_total=tot,
-                bytes_done=kpi_dict.get("bytes_done", self.bytes_done),
-                total_bytes=kpi_dict.get("total_bytes", self.total_bytes),
-            )
-            # Only update progress bar max if not in byte-based upload mode
-            if self.tool_mode != "upload" and tot > 0 and self.progress_bar.maximum() != tot:
-                self.progress_bar.setMaximum(tot)
+
+            # Never reduce the global files total
+            new_tot = kpi_dict.get("total")
+            if new_tot is not None and int(new_tot) > self.files_total:
+                self.files_total = int(new_tot)
+            self.total_items = max(self.total_items, self.files_total)
+
+            new_tb = kpi_dict.get("total_bytes")
+            if new_tb is not None and int(new_tb) > self.total_bytes:
+                self.total_bytes = int(new_tb)
+
+            kargs = {
+                "bytes_done": kpi_dict.get("bytes_done", self.bytes_done),
+            }
+            if self.files_total > 0:
+                kargs["files_total"] = self.files_total
+            if self.total_bytes > 0:
+                kargs["total_bytes"] = self.total_bytes
+            self.update_kpis(**kargs)
+            if self.tool_mode != "upload" and self.files_total > 0 and self.progress_bar.maximum() != self.files_total:
+                self.progress_bar.setMaximum(self.files_total)
         elif t == "file_start":
             self.update_kpis(
                 current_file_name=kpi_dict.get("file_name", "-"),
                 current_file_size=kpi_dict.get("file_size", 0),
                 bytes_done=kpi_dict.get("bytes_done", self.bytes_done),
-                total_bytes=kpi_dict.get("total_bytes", self.total_bytes),
             )
         elif t in ("file_done", "item_done"):
             is_file_task = bool(kpi_dict.get("is_file_task") or (self.files_total > 0 and self.total_students <= 0))
 
             # Update per-student file counters
-            # Upload: student_files_done comes from explicit field; fallback to files_done (per-student local)
-            # Download: files_done in the event is already per-student cumulative
             per_student_done = kpi_dict.get("student_files_done",
                 kpi_dict.get("files_done", self.student_files_done))
             self.student_files_done = int(per_student_done) if per_student_done is not None else self.student_files_done
@@ -1140,15 +1364,17 @@ class BaseToolWidget(QWidget):
 
             # Update global files uploaded counter for upload mode
             if self.tool_mode == "upload" and "files_done" in kpi_dict:
-                self.total_files_uploaded = int(kpi_dict["files_done"])
+                self.total_files_uploaded = max(self.total_files_uploaded, int(kpi_dict["files_done"]))
 
             kargs = {
                 "current_file_name": kpi_dict.get("file_name", self.current_file_name),
                 "current_file_size": kpi_dict.get("file_size", 0),
                 "bytes_done": kpi_dict.get("bytes_done", self.bytes_done),
-                "total_bytes": kpi_dict.get("total_bytes", self.total_bytes),
                 "skipped": bool(kpi_dict.get("skipped", False)),
             }
+            if "total_bytes" in kpi_dict and int(kpi_dict["total_bytes"]) > self.total_bytes:
+                kargs["total_bytes"] = int(kpi_dict["total_bytes"])
+
             if "students_traversed" in kpi_dict:
                 kargs["students_traversed"] = kpi_dict["students_traversed"]
             elif t == "item_done":
@@ -1157,12 +1383,15 @@ class BaseToolWidget(QWidget):
 
             if is_file_task:
                 kargs["files_done"] = kpi_dict.get("completed", self.files_done + 1)
-                if "files_total" in kpi_dict:
-                    kargs["files_total"] = kpi_dict["files_total"]
+                if "files_total" in kpi_dict and int(kpi_dict["files_total"]) > self.files_total:
+                    kargs["files_total"] = int(kpi_dict["files_total"])
             elif "files_done" in kpi_dict:
-                kargs["files_done"] = kpi_dict["files_done"]
-            if "files_total" in kpi_dict:
-                kargs["files_total"] = kpi_dict["files_total"]
+                if self.tool_mode == "upload":
+                    kargs["files_done"] = max(self.files_done, int(kpi_dict["files_done"]))
+                else:
+                    kargs["files_done"] = int(kpi_dict["files_done"])
+            if "files_total" in kpi_dict and int(kpi_dict["files_total"]) > self.files_total:
+                kargs["files_total"] = int(kpi_dict["files_total"])
 
             if "student_id" in kpi_dict:
                 kargs["current_student_id"] = kpi_dict["student_id"]
@@ -1174,7 +1403,7 @@ class BaseToolWidget(QWidget):
 
             # Update global files_uploaded for upload mode
             if self.tool_mode == "upload" and "files_done" in kpi_dict:
-                self.total_files_uploaded = int(kpi_dict["files_done"])
+                self.total_files_uploaded = max(self.total_files_uploaded, int(kpi_dict["files_done"]))
             if "files_total" in kpi_dict and int(kpi_dict["files_total"]) > self.files_total:
                 self.files_total = int(kpi_dict["files_total"])
 
@@ -1182,10 +1411,36 @@ class BaseToolWidget(QWidget):
                 students_traversed=st_done,
                 total_students=tot_st if tot_st > 0 else self.total_students,
                 bytes_done=kpi_dict.get("bytes_done", self.bytes_done),
-                total_bytes=kpi_dict.get("total_bytes", self.total_bytes),
                 skipped=bool(kpi_dict.get("skipped", False)),
             )
+            if "total_bytes" in kpi_dict and int(kpi_dict["total_bytes"]) > self.total_bytes:
+                kpi_args["total_bytes"] = int(kpi_dict["total_bytes"])
+            if "total_rows" in kpi_dict:
+                kpi_args["total_rows"] = kpi_dict["total_rows"]
+            if "rows_done" in kpi_dict:
+                kpi_args["rows_done"] = kpi_dict["rows_done"]
+            if "files_done" in kpi_dict:
+                if self.tool_mode == "upload":
+                    kpi_args["files_done"] = max(self.files_done, int(kpi_dict["files_done"]))
+                else:
+                    kpi_args["files_done"] = int(kpi_dict["files_done"])
             self.update_kpis(**kpi_args)
+        elif t in ("run_finished", "all_students_done"):
+            if self.total_students > 0:
+                self.students_traversed = self.total_students
+            if self.total_rows > 0:
+                self.rows_done = self.total_rows
+            if "files_done" in kpi_dict:
+                self.files_done = max(self.files_done, int(kpi_dict["files_done"]))
+                self.total_files_uploaded = max(self.total_files_uploaded, self.files_done)
+            elif self.files_total > 0:
+                self.files_done = max(self.files_done, self.files_total)
+                self.total_files_uploaded = self.files_done
+            if "bytes_done" in kpi_dict:
+                self.bytes_done = max(self.bytes_done, int(kpi_dict["bytes_done"]))
+            elif self.total_bytes > 0:
+                self.bytes_done = max(self.bytes_done, self.total_bytes)
+            self.update_kpis()
 
     # ------------------------------------------------------------------
     # Queue Management
@@ -1275,6 +1530,13 @@ class BaseToolWidget(QWidget):
         self.student_files_done = 0
         self.student_files_total = 0
         self.total_files_uploaded = 0
+        self.total_rows = 0
+        self.rows_done = 0
+        if hasattr(self, 'bar_lbl_students'):
+            self.bar_lbl_students.setText("🎓 Students: 0 / 0 (0.0%)")
+            self.bar_lbl_rows.setText("📑 Rows: 0 / 0 (0.0%)")
+            self.bar_lbl_files.setText("📁 Files: 0 / 0 (0.0%)")
+            self.bar_lbl_size.setText("💾 Size: 0 B / 0 B (0.0%)")
 
     def start_automation(self):
         """Launches single or queued tasks."""

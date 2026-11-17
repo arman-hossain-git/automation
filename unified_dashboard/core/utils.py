@@ -110,13 +110,14 @@ def sanitize_filename(name: str) -> str:
 
 
 def sanitize_upload_filename(filename: str) -> str:
-    """Normalize filenames that have multiple dots (e.g. ``a.b.pdf`` → ``a_b.pdf``).
+    """Normalize filenames that have multiple dots (e.g. ``a.b.pdf`` → ``a_b.pdf``)
+    and remove characters that break web portal multipart/SQL storage (such as single quotes / apostrophes).
     Keeps the final extension, replaces dots in the base name with underscores."""
-    if filename.count('.') > 1:
+    if '.' in filename:
         base, ext = filename.rsplit('.', 1)
-        base = base.replace('.', '_')
+        base = base.replace('.', '_').replace("'", "")
         return f"{base}.{ext}"
-    return filename
+    return filename.replace("'", "")
 
 
 # ---------------------------------------------------------------------------

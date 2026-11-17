@@ -10,9 +10,9 @@ Built with Python, PySide6 (Qt for Python), Selenium, and `pdfplumber`, the suit
 
 > **No installation or Python required!**
 > 
-> You can download the ready-to-run **`UnifiedDashboard.exe`** directly from GitHub Releases:
+> You can download the ready-to-run **`UniSysAuto v{version}.exe`** (e.g. `UniSysAuto v1.0.8.exe`) directly from GitHub Releases:
 > 
-> 👉 **[Download Latest UnifiedDashboard.exe (Windows)](https://github.com/arman-hossain-git/automation/releases/latest)**
+> 👉 **[Download Latest UniSysAuto Executable (Windows)](https://github.com/arman-hossain-git/automation/releases/latest)**
 > 
 > Just double-click the downloaded `.exe` to launch the application. *(Note: Google Chrome must be installed on your machine).*
 
@@ -345,7 +345,7 @@ The suite learns as it runs to become faster and more reliable:
 
 ## 📦 Building the Windows Executable
 
-To compile the entire suite into a standalone Windows executable (`UnifiedDashboard.exe`) that runs on any Windows machine without requiring Python:
+To compile the entire suite into a standalone Windows executable (`UniSysAuto v{version}.exe` / `UnifiedDashboard.exe`) that runs on any Windows machine without requiring Python:
 
 Run the included batch script:
 ```cmd

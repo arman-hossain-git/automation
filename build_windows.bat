@@ -30,6 +30,7 @@ REM previous run (or File Explorer/antivirus still touching a freshly
 REM written one) is the #1 cause of "PermissionError ... UnifiedDashboard.exe"
 REM during this step.
 taskkill /F /IM UnifiedDashboard.exe /T >nul 2>nul
+taskkill /F /IM "UniSysAuto*.exe" /T >nul 2>nul
 timeout /t 1 /nobreak >nul
 
 if exist build rmdir /s /q build
@@ -51,11 +52,28 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Determine version string for the final executable name: UniSysAuto v{version}.exe
+set "APP_VER=%~1"
+if "%APP_VER%"=="" (
+    for /f "tokens=*" %%g in ('git describe --tags --abbrev^=0 2^>nul') do (
+        set "APP_VER=%%g"
+    )
+)
+if "%APP_VER%"=="" set "APP_VER=1.0.8"
+
+REM Strip leading v/V if present to ensure clean 'UniSysAuto v{version}.exe' format
+set "VER_NUM=%APP_VER%"
+if "%VER_NUM:~0,1%"=="v" set "VER_NUM=%VER_NUM:~1%"
+if "%VER_NUM:~0,1%"=="V" set "VER_NUM=%VER_NUM:~1%"
+set "FINAL_EXE_NAME=UniSysAuto v%VER_NUM%.exe"
+
 echo.
 if exist "dist\UnifiedDashboard.exe" (
+    copy /y "dist\UnifiedDashboard.exe" "dist\%FINAL_EXE_NAME%" >nul
     echo ============================================================
     echo  BUILD SUCCEEDED
-    echo  Output: dist\UnifiedDashboard.exe
+    echo  Download / Primary Output: dist\%FINAL_EXE_NAME%
+    echo  (Also available: dist\UnifiedDashboard.exe)
     echo  This is a single portable file -- copy it anywhere (USB
     echo  stick, another PC, a shared drive) and run it directly.
     echo  No installer and no separate Python install is needed on

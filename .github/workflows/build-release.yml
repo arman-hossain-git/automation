@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. v1.0.5)'
+        description: 'Release version (e.g. v1.0.5, 1.06, or 1.0.7)'
         required: false
         default: ''
 
@@ -32,25 +32,42 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+            RAW_VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            VERSION="${{ github.ref_name }}"
+            RAW_VERSION="${{ github.ref_name }}"
           else
             # Auto-increment patch version from latest tag
-            LATEST=$(git tag --sort=-version:refname | grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            LATEST=$(git tag --sort=-version:refname | grep -E '^v?[0-9]+\.[0-9]+' | head -1)
             if [ -z "$LATEST" ]; then
-              VERSION="v1.0.5"
+              RAW_VERSION="v1.0.8"
             else
               # Increment patch number
-              MAJOR=$(echo $LATEST | cut -d. -f1 | tr -d 'v')
-              MINOR=$(echo $LATEST | cut -d. -f2)
-              PATCH=$(echo $LATEST | cut -d. -f3)
+              VER_STR="${LATEST#v}"
+              MAJOR=$(echo "$VER_STR" | cut -d. -f1)
+              MINOR=$(echo "$VER_STR" | cut -d. -f2)
+              PATCH=$(echo "$VER_STR" | cut -d. -f3)
+              if [ -z "$PATCH" ]; then
+                PATCH=0
+              fi
               PATCH=$((PATCH + 1))
-              VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+              RAW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
             fi
           fi
+
+          # Normalize version formatting:
+          # Strip leading 'v'/'V' for version number, ensure tag has 'v', format EXE name as UniSysAuto v{version}.exe
+          VER_NUM="${RAW_VERSION#v}"
+          VER_NUM="${VER_NUM#V}"
+          VERSION="v${VER_NUM}"
+          EXE_NAME="UniSysAuto v${VER_NUM}.exe"
+          EXE_STEM="UniSysAuto-v${VER_NUM}-Windows-EXE"
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building release: $VERSION"
+          echo "ver_num=$VER_NUM" >> $GITHUB_OUTPUT
+          echo "exe_name=$EXE_NAME" >> $GITHUB_OUTPUT
+          echo "exe_stem=$EXE_STEM" >> $GITHUB_OUTPUT
+          echo "Release Version: $VERSION"
+          echo "Download Executable Name: $EXE_NAME"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -70,11 +87,18 @@ jobs:
         run: |
           python -m PyInstaller build.spec --clean --noconfirm
 
-      - name: Verify Executable Exists
+      - name: Verify Executable and Prepare Named Binary
+        shell: pwsh
         run: |
-          if (Test-Path "unified_dashboard/dist/UnifiedDashboard.exe") {
-            $size = (Get-Item "unified_dashboard/dist/UnifiedDashboard.exe").Length / 1MB
+          $distDir = "unified_dashboard/dist"
+          $defaultExe = Join-Path $distDir "UnifiedDashboard.exe"
+          $namedExe = Join-Path $distDir "${{ steps.version.outputs.exe_name }}"
+
+          if (Test-Path $defaultExe) {
+            $size = (Get-Item $defaultExe).Length / 1MB
             Write-Host "Success: UnifiedDashboard.exe built ($([math]::Round($size, 2)) MB)"
+            Copy-Item -Path $defaultExe -Destination $namedExe -Force
+            Write-Host "Prepared downloadable release binary: $namedExe"
           } else {
             Write-Error "UnifiedDashboard.exe not found in dist/"
             exit 1
@@ -83,24 +107,25 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UnifiedDashboard-Windows-EXE
-          path: unified_dashboard/dist/UnifiedDashboard.exe
+          name: ${{ steps.version.outputs.exe_stem }}
+          path: unified_dashboard/dist/${{ steps.version.outputs.exe_name }}
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: "Unified System Automation Suite ${{ steps.version.outputs.version }} (Ready-to-Execute)"
+          name: "UniSysAuto ${{ steps.version.outputs.version }} (Ready-to-Execute)"
           draft: false
           prerelease: false
-          files: unified_dashboard/dist/UnifiedDashboard.exe
+          files: |
+            unified_dashboard/dist/${{ steps.version.outputs.exe_name }}
           body: |
-            ## 🚀 Unified System Automation Suite ${{ steps.version.outputs.version }}
+            ## 🚀 UniSysAuto ${{ steps.version.outputs.version }}
 
             This release provides a single, portable, ready-to-run `.exe` for Windows.
 
             ### Instructions for Users:
-            1. Download **`UnifiedDashboard.exe`** from the Assets list below.
-            2. Double-click **`UnifiedDashboard.exe`** to launch the dashboard.
+            1. Download **`${{ steps.version.outputs.exe_name }}`** from the Assets list below.
+            2. Double-click **`${{ steps.version.outputs.exe_name }}`** to launch the dashboard.
             3. **No Python or command-line installation required.**
             4. *Note: Google Chrome must be installed on your computer for automation tasks.*

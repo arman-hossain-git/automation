@@ -98,7 +98,11 @@ hidden_imports = [
     'modules.file_exporter',
     'modules.file_uploader',
     'modules.grade_submission',
+    'modules.student_removal',
+    'modules.field_updater',
     'modules.pdf_extractor',
+    'modules.pdf_spatial_ml',
+    'modules.pdf_rule_tuner',
     'ui',
     'ui.base_tool_frame',
     'ui.dashboard',
@@ -127,6 +131,13 @@ hidden_imports = [
     'selenium.common.exceptions',
     'webdriver_manager',
     'webdriver_manager.chrome',
+    # HTTP & networking
+    'requests',
+    'requests.adapters',
+    'urllib3',
+    'urllib3.util',
+    'urllib3.util.retry',
+    'certifi',
     # Data
     'pandas',
     'openpyxl',
@@ -173,6 +184,26 @@ hidden_imports = [
     'ui_qt',
     'ui_qt.main_window',
     'ui_qt.theme',
+    # ui_qt views — loaded via __import__() at runtime; PyInstaller's static
+    # analysis misses these dynamic imports so they must be listed explicitly.
+    'ui_qt.views',
+    'ui_qt.views.home_view',
+    'ui_qt.views.file_exporter_view',
+    'ui_qt.views.file_uploader_view',
+    'ui_qt.views.grade_view',
+    'ui_qt.views.student_removal_view',
+    'ui_qt.views.field_updater_view',
+    'ui_qt.views.pdf_extractor_view',
+    'ui_qt.views.pdf_review_view',
+    'ui_qt.views.data_harmonizer_view',
+    'ui_qt.views.learning_view',
+    'ui_qt.views.documentation_view',
+    'ui_qt.views.settings_view',
+    # ui_qt components (also referenced dynamically)
+    'ui_qt.components',
+    'ui_qt.components.base_tool_widget',
+    # modules referenced by the views above
+    'modules.field_updater',
 ] + pandas_submodules + selenium_submodules + webdriver_manager_submodules + sklearn_submodules + pyside6_submodules + ui_qt_submodules
 
 a = Analysis(

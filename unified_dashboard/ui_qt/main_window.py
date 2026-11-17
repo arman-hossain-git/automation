@@ -26,6 +26,16 @@ from ui_qt.theme import (
     get_global_stylesheet
 )
 from ui_qt.views.home_view import HomeView
+from ui_qt.views.file_exporter_view import FileExporterView
+from ui_qt.views.file_uploader_view import FileUploaderView
+from ui_qt.views.grade_view import GradeView
+from ui_qt.views.student_removal_view import StudentRemovalView
+from ui_qt.views.field_updater_view import FieldUpdaterView
+from ui_qt.views.pdf_extractor_view import PdfExtractorView
+from ui_qt.views.data_harmonizer_view import DataHarmonizerView
+from ui_qt.views.learning_view import LearningView
+from ui_qt.views.documentation_view import DocumentationView
+from ui_qt.views.settings_view import SettingsView
 
 SIDEBAR_EXPANDED_W = 260
 SIDEBAR_COLLAPSED_W = 56
@@ -58,6 +68,7 @@ class NavItem(QFrame):
         self.lbl_icon = QLabel(icon)
         self.lbl_icon.setStyleSheet(f"font-size: 18px; background: transparent; border: none; min-width: 24px;")
         self.lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_icon.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.lbl_icon)
 
         text_box = QVBoxLayout()
@@ -66,11 +77,13 @@ class NavItem(QFrame):
 
         self.lbl_title = QLabel(title)
         self.lbl_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {TEXT_PRIMARY}; background: transparent; border: none;")
+        self.lbl_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         text_box.addWidget(self.lbl_title)
 
         if subtitle:
             self.lbl_sub = QLabel(subtitle)
             self.lbl_sub.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED}; background: transparent; border: none;")
+            self.lbl_sub.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             text_box.addWidget(self.lbl_sub)
         else:
             self.lbl_sub = None
@@ -80,6 +93,7 @@ class NavItem(QFrame):
         if has_sub:
             self.lbl_arrow = QLabel("›")
             self.lbl_arrow.setStyleSheet(f"font-size: 14px; color: {TEXT_MUTED}; background: transparent; border: none;")
+            self.lbl_arrow.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(self.lbl_arrow)
         else:
             self.lbl_arrow = None
@@ -152,10 +166,12 @@ class SubNavItem(QFrame):
 
         self.lbl_title = QLabel(f"{icon}  {title}")
         self.lbl_title.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {TEXT_PRIMARY}; background: transparent; border: none;")
+        self.lbl_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.lbl_title)
 
         lbl_desc = QLabel(desc)
         lbl_desc.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED}; background: transparent; border: none;")
+        lbl_desc.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(lbl_desc)
 
     def set_active(self, active: bool):
@@ -440,17 +456,17 @@ class MainWindow(QMainWindow):
     def _create_view(self, view_id: str):
         """Creates a view widget and adds it to the stacked layout."""
         view_factories = {
-            "home": lambda: HomeView(),
-            "file_exporter": lambda: __import__("ui_qt.views.file_exporter_view", fromlist=["FileExporterView"]).FileExporterView(),
-            "file_uploader": lambda: __import__("ui_qt.views.file_uploader_view", fromlist=["FileUploaderView"]).FileUploaderView(),
-            "grades": lambda: __import__("ui_qt.views.grade_view", fromlist=["GradeView"]).GradeView(),
-            "student_removal": lambda: __import__("ui_qt.views.student_removal_view", fromlist=["StudentRemovalView"]).StudentRemovalView(),
-            "field_updater": lambda: __import__("ui_qt.views.field_updater_view", fromlist=["FieldUpdaterView"]).FieldUpdaterView(),
-            "pdf_extractor": lambda: __import__("ui_qt.views.pdf_extractor_view", fromlist=["PdfExtractorView"]).PdfExtractorView(),
-            "data_harmonizer": lambda: __import__("ui_qt.views.data_harmonizer_view", fromlist=["DataHarmonizerView"]).DataHarmonizerView(),
-            "learning": lambda: __import__("ui_qt.views.learning_view", fromlist=["LearningView"]).LearningView(),
-            "documentation": lambda: __import__("ui_qt.views.documentation_view", fromlist=["DocumentationView"]).DocumentationView(),
-            "settings": lambda: __import__("ui_qt.views.settings_view", fromlist=["SettingsView"]).SettingsView(),
+            "home": HomeView,
+            "file_exporter": FileExporterView,
+            "file_uploader": FileUploaderView,
+            "grades": GradeView,
+            "student_removal": StudentRemovalView,
+            "field_updater": FieldUpdaterView,
+            "pdf_extractor": PdfExtractorView,
+            "data_harmonizer": DataHarmonizerView,
+            "learning": LearningView,
+            "documentation": DocumentationView,
+            "settings": SettingsView,
         }
 
         factory = view_factories.get(view_id)
@@ -462,7 +478,18 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(view)
             return view
         except Exception as e:
-            print(f"[ERROR] Failed to load view '{view_id}': {e}", file=sys.stderr)
+            import traceback
+            err_details = traceback.format_exc()
+            print(f"[ERROR] Failed to load view '{view_id}': {err_details}", file=sys.stderr)
+            try:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self,
+                    "Module Load Error",
+                    f"Failed to open '{view_id}':\n\n{e}\n\nDetails:\n{err_details[:400]}"
+                )
+            except Exception:
+                pass
             return None
 
     # ------------------------------------------------------------------

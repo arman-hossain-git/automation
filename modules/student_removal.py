@@ -271,7 +271,7 @@ class StudentRemover:
     and persists changes by saving the class form.
     """
 
-    _csv_lock: threading.Lock = _csv_write_lock
+    _csv_lock = _csv_write_lock
     _run_id: str = ""
 
     def __init__(self, log=None, on_progress=None, abort_flag=None):

@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 # ── Module-level driver-resolution state ──────────────────────────────────────
 # Protects _cached_driver_path so only one thread resolves/downloads the
 # ChromeDriver binary at a time.
-_driver_lock: threading.Lock = threading.Lock()
+_driver_lock = threading.Lock()
 _cached_driver_path: str | None = None          # set after first successful install
 _selenium_manager_works: bool | None = None     # True/False after first probe
 
 # Limits simultaneous Chrome process launches to avoid OS spawn storms.
 # Stagger up to 8 windows at once; the rest queue and launch as slots free.
-_launch_semaphore: threading.Semaphore = threading.Semaphore(8)
+_launch_semaphore = threading.Semaphore(8)
 
 
 def launch_chrome_driver(

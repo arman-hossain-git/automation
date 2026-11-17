@@ -197,7 +197,7 @@ def _route_key(url: str) -> str:
 class FileExporter:
     """Universal File Exporter — RadDock, tabs, headings, plain tables, MyPath Documents, and MyPath generate mode."""
 
-    _csv_lock: threading.Lock | None = None
+    _csv_lock = None
     _run_id: str = ""
 
     # ------------------------------------------------------------------

@@ -599,7 +599,7 @@ class FieldUpdater:
         link: str,
         status: str,
         detail: str,
-        lock: threading.Lock | None = None,
+        lock = None,
     ) -> None:
         run_id = getattr(self, '_run_id', None) or new_run_id()
         log_dir = os.path.dirname(os.path.abspath(csv_path))

@@ -1235,7 +1235,7 @@ class FieldUpdater:
 
         detail: str,
 
-        lock: threading.Lock | None = None,
+        lock = None,
 
     ) -> None:
 

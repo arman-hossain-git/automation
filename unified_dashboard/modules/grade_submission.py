@@ -298,7 +298,7 @@ def _update_master_csv(master_path: str, header: list, student_id: str, link: st
 class GradeSubmitter:
     """Submits student final grades with automatic detection of Adjust Score vs Grade dropdown field."""
 
-    _csv_lock: threading.Lock = _csv_write_lock
+    _csv_lock = _csv_write_lock
     _run_id: str = ""
 
     def __init__(self, log=None, on_progress=None, abort_flag=None):

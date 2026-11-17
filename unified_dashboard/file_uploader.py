@@ -107,11 +107,11 @@ DEFAULT_XPATHS = {
 class FileUploader:
     """Unified File Uploader for PCR Educator & Orbund portals."""
 
-    _csv_lock: threading.Lock | None = None
+    _csv_lock = None
     _run_id: str = ""
     _global_known_folders: set = set()
     _global_rejected_extensions: set = set()
-    _global_cache_lock: threading.Lock = threading.Lock()
+    _global_cache_lock = threading.Lock()
 
     def __init__(self):
         self._log = lambda l, m: None

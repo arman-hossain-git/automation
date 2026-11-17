@@ -74,11 +74,11 @@ class LearningEngine:
     """
 
     _instance = None
-    _lock: threading.RLock
-    _save_lock: threading.Lock
-    _last_save_time: float
-    _dirty: bool
-    _data: dict
+    _lock = None
+    _save_lock = None
+    _last_save_time: float = 0.0
+    _dirty: bool = False
+    _data: dict = {}
 
     def __new__(cls):
         if cls._instance is None:

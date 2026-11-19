@@ -303,6 +303,12 @@ class LearningEngine:
         ext_clean = ext.strip().lower().lstrip('.')
         if not ext_clean:
             return
+        # Orbund takes valid file types and does not reject them as file types.
+        # If Orbund rejects a valid file type there is a problem with the file name
+        # or content, so we must never blacklist valid Orbund extensions.
+        from core.utils import ORBUND_ALLOWED_EXTENSIONS
+        if ext_clean in ORBUND_ALLOWED_EXTENSIONS:
+            return
         domain = self.extract_domain(url)
         with self._lock:
             profile = self._get_domain_profile(domain)
@@ -317,6 +323,9 @@ class LearningEngine:
         if not ext:
             return False
         ext_clean = ext.strip().lower().lstrip('.')
+        from core.utils import ORBUND_ALLOWED_EXTENSIONS
+        if ext_clean in ORBUND_ALLOWED_EXTENSIONS:
+            return False
         return ext_clean in self.get_rejected_file_types(url)
 
     def get_rejected_file_types(self, url: str) -> set:
@@ -329,7 +338,8 @@ class LearningEngine:
                 .get("strategies", {})
                 .get("rejected_file_types", [])
             )
-            return set(raw)
+            from core.utils import ORBUND_ALLOWED_EXTENSIONS
+            return set(raw) - ORBUND_ALLOWED_EXTENSIONS
 
     # ------------------------------------------------------------------
     # Timing & Latency Learning

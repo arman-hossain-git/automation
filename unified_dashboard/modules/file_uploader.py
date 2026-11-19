@@ -68,6 +68,11 @@ from core.utils import (
     new_run_id,
     find_latest_run_log,
     is_network_error,
+    ORBUND_ALLOWED_FILE_TYPES,
+    ORBUND_ALLOWED_EXTENSIONS,
+    is_orbund_allowed_file_type,
+    get_orbund_mime_type,
+    extract_file_extension,
 )
 from core.learning_system import learning_engine
 from core.session_manager import (
@@ -159,6 +164,7 @@ class FileUploader:
         login_url = config.get('login_url', '')
         with FileUploader._global_cache_lock:
             FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_rejected_extensions.difference_update(ORBUND_ALLOWED_EXTENSIONS)
             FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
 
         session_inputs = session_inputs or {
@@ -531,7 +537,42 @@ class FileUploader:
                                 except OSError:
                                     pass
 
-                                file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
+                                file_ext = extract_file_extension(file_name)
+
+                                # --- ENFORCE ORBUND ALLOWED FILE TYPES WHITELIST ---
+                                # Only the 42 specific file types accepted by Orbund are allowed.
+                                # Any file with any other type is rejected by Orbund; do not upload it.
+                                if file_ext not in ORBUND_ALLOWED_EXTENSIONS:
+                                    ext_desc = f".{file_ext}" if file_ext else "no extension"
+                                    self._log('warning',
+                                        f"[DISALLOWED FILE TYPE] Skipping '{file_name}' — '{ext_desc}' "
+                                        f"is not accepted by Orbund. Upload skipped."
+                                    )
+                                    files_done += 1
+                                    bytes_done_overall += f_size
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'],
+                                        'fileName':      file_name,
+                                        'uploadedAs':    '-',
+                                        'action':        'skipped_unsupported',
+                                        'actionComment': f"Disallowed file extension '{ext_desc}' -- Orbund only accepts supported file types. File was not uploaded.",
+                                        'validation':    'skipped',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                    self._on_progress({
+                                        'type': 'file_done',
+                                        'file_name': file_name,
+                                        'file_size': f_size,
+                                        'files_done': total_uploaded,
+                                        'files_total': total_files_overall,
+                                        'bytes_done': bytes_done_overall,
+                                        'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
+                                    })
+                                    continue
+
                                 is_rejected = False
                                 with FileUploader._global_cache_lock:
                                     if file_ext in FileUploader._global_rejected_extensions:
@@ -598,6 +639,8 @@ class FileUploader:
                                     continue
 
                                 upload_name = sanitize_upload_filename(file_name)
+                                if upload_name != file_name:
+                                    self._log('info', f"[SANITIZE] Filename '{file_name}' sanitized to '{upload_name}' before uploading.")
                                 fn_lower = file_name.strip().lower()
                                 un_lower = upload_name.strip().lower()
 
@@ -1034,16 +1077,36 @@ class FileUploader:
                                 elif isinstance(upload_err, (MalformedFileError, UnsupportedFormatError)):
                                     files_done += 1
                                     bytes_done_overall += f_sz
-                                    file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
-                                    if file_ext:
-                                        with FileUploader._global_cache_lock:
-                                            FileUploader._global_rejected_extensions.add(file_ext)
-                                        learning_engine.record_rejected_file_type(login_url, file_ext)
-                                        self._log('warning', f"[LEARNING] Learned rejected file format '.{file_ext}' for this portal. Future files with this format will be skipped upfront in 0.0s.")
-
+                                    file_ext = extract_file_extension(file_name)
                                     is_unsup = isinstance(upload_err, UnsupportedFormatError)
-                                    action_name = 'skipped_unsupported' if is_unsup else 'skipped_malformed'
-                                    comment_name = f"Unsupported file format ({upload_err}) -- will not be retried." if is_unsup else f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried."
+
+                                    if file_ext in ORBUND_ALLOWED_EXTENSIONS:
+                                        # Orbund accepts this file type; the error indicates a problem
+                                        # with filename encoding/length or file content, NOT the file type itself.
+                                        # NEVER blacklist or learn a valid Orbund extension as rejected!
+                                        self._log('error',
+                                            f"[ORBUND REJECTION] Orbund rejected '{file_name}' (uploaded as '{upload_name}') "
+                                            f"even though '.{file_ext}' is a valid Orbund file type! Error: {upload_err}. "
+                                            f"This indicates a problem with the file name or file content/corruption. "
+                                            f"The extension '.{file_ext}' will NOT be marked as rejected."
+                                        )
+                                        action_name = 'failed_rejected_by_portal'
+                                        comment_name = (
+                                            f"Orbund rejected valid file type '.{file_ext}' ({upload_err}) -- "
+                                            f"check filename characters/length or file corruption. Extension not blacklisted."
+                                        )
+                                        val_status = 'failed'
+                                    else:
+                                        if file_ext:
+                                            with FileUploader._global_cache_lock:
+                                                FileUploader._global_rejected_extensions.add(file_ext)
+                                            learning_engine.record_rejected_file_type(login_url, file_ext)
+                                            self._log('warning', f"[LEARNING] Learned rejected file format '.{file_ext}' for this portal. Future files with this format will be skipped upfront in 0.0s.")
+
+                                        action_name = 'skipped_unsupported' if is_unsup else 'skipped_malformed'
+                                        comment_name = f"Unsupported file format ({upload_err}) -- will not be retried." if is_unsup else f"Malformed or invalid file name ({upload_err}) -- 'Ok' clicked, will not be retried."
+                                        val_status = 'skipped'
+
                                     batch_logs.append({
                                         'studentId':     student_id,
                                         'category':      category['name'],
@@ -1051,7 +1114,7 @@ class FileUploader:
                                         'uploadedAs':    upload_name,
                                         'action':        action_name,
                                         'actionComment': comment_name,
-                                        'validation':    'skipped',
+                                        'validation':    val_status,
                                         'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
                                     })
                                 else:
@@ -1340,6 +1403,7 @@ class FileUploader:
         login_url = config.get('login_url', '')
         with FileUploader._global_cache_lock:
             FileUploader._global_rejected_extensions.update(learning_engine.get_rejected_file_types(login_url))
+            FileUploader._global_rejected_extensions.difference_update(ORBUND_ALLOWED_EXTENSIONS)
             FileUploader._global_known_folders.update(learning_engine.get_known_global_folders(login_url))
 
         session_inputs = session_inputs or {
@@ -1713,15 +1777,24 @@ class FileUploader:
         root_expected_files = set()
         root_path = student_root_folder
         for c in category_folders:
+            valid_files = []
+            for f in c['files']:
+                ext = extract_file_extension(f)
+                if ext not in ORBUND_ALLOWED_EXTENSIONS:
+                    ext_desc = f".{ext}" if ext else "no extension"
+                    self._log('warning', f"[AUDIT] Skipping '{f}' ({ext_desc}) — not an allowed Orbund file type. Excluded from upload audit.")
+                else:
+                    valid_files.append(f)
+
             if c.get('is_root'):
-                root_expected_files = set(c['files'])
+                root_expected_files = set(valid_files)
                 root_path = c['path']
             else:
                 local_category_map[c['name'].strip().lower()] = {
                     'name': c['name'],
                     'path': c['path'],
-                    'files': set(c['files']),
-                    'sanitized': {sanitize_upload_filename(f): f for f in c['files']}
+                    'files': set(valid_files),
+                    'sanitized': {sanitize_upload_filename(f): f for f in valid_files}
                 }
 
         all_expected_files_map = {}
@@ -1781,7 +1854,8 @@ class FileUploader:
                     self._log('warning', f"[AUDIT MISSING] Root file '{exp_f}' missing from '{target_folder_name or 'Root'}'. Uploading...")
                     src_fpath = os.path.join(root_path, exp_f)
                     if os.path.isfile(src_fpath):
-                        tmp_path = os.path.join(tmp_upload_dir, exp_f)
+                        upload_name = sanitize_upload_filename(exp_f)
+                        tmp_path = os.path.join(tmp_upload_dir, upload_name)
                         try:
                             shutil.copy2(src_fpath, tmp_path)
                             click_xpath(driver, wait, config['upload_tool_button_xpath'], "Upload module button", log_func=self._log)
@@ -1791,7 +1865,7 @@ class FileUploader:
                             try_click_xpath(driver, config['upload_popup_ok_xpath'], "Upload confirmation OK", timeout=2, log_func=self._log)
                             reuploaded += 1
                             correct_verified += 1
-                            self._log('info', f"[AUDIT REMEDIATION] Successfully uploaded missing root file '{exp_f}'.")
+                            self._log('info', f"[AUDIT REMEDIATION] Successfully uploaded missing root file '{exp_f}' as '{upload_name}'.")
                         except Exception as up_err:
                             self._log('error', f"[AUDIT REMEDIATION] Failed uploading '{exp_f}' to root: {describe_exception(up_err)}")
                         finally:
@@ -1920,7 +1994,7 @@ class FileUploader:
                     try:
                         click_xpath(driver, wait, config['upload_tool_button_xpath'], "Upload module button", log_func=self._log)
                         file_input = wait.until(EC.presence_of_element_located((By.XPATH, config['file_input_xpath'])))
-                        file_input.send_keys(os.path.abspath(tmp_path))
+                        set_file_input_files(driver, file_input, [tmp_path], log_func=self._log)
                         click_xpath(driver, wait, config['upload_submit_xpath'], "Upload submit", log_func=self._log)
                         try_click_xpath(driver, config['upload_popup_ok_xpath'], "Upload confirmation OK", timeout=2, log_func=self._log)
                         reuploaded += 1
@@ -2010,7 +2084,7 @@ class FileUploader:
                     self._log('info', f"[AUDIT REMEDIATION] Uploading '{file_name}' to new folder '{folder_name}'...")
                     click_xpath(driver, wait, config['upload_tool_button_xpath'], "Upload module button", log_func=self._log)
                     file_input = wait.until(EC.presence_of_element_located((By.XPATH, config['file_input_xpath'])))
-                    file_input.send_keys(os.path.abspath(tmp_path))
+                    set_file_input_files(driver, file_input, [tmp_path], log_func=self._log)
                     click_xpath(driver, wait, config['upload_submit_xpath'], "Upload submit", log_func=self._log)
                     try_click_xpath(driver, config['upload_popup_ok_xpath'], "Upload confirmation OK", timeout=2, log_func=self._log)
                     reuploaded += 1

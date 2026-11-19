@@ -217,6 +217,7 @@ class FileUploaderView(BaseToolWidget):
         n_str = "parallel x" + str(n_workers) if n_workers > 1 else "sequential"
         dup_str = "enabled (skip if already uploaded)" if skip_dups else "disabled (force re-upload)"
         log_cb(f"Initializing File Uploader engine ({n_str}) | Duplicate check: {dup_str}...", "INFO")
+        log_cb("Orbund file type policy active: 42 allowed types enforced, auto-sanitizing filenames.", "INFO")
         common_kwargs = dict(
             config=config,
             students=students,

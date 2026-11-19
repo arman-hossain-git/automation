@@ -5,9 +5,11 @@ Shared utility functions reused across all automation modules.
 """
 
 import os
+import re
 import csv
 import hashlib
 import datetime
+import unicodedata
 
 
 # ---------------------------------------------------------------------------
@@ -109,15 +111,129 @@ def sanitize_filename(name: str) -> str:
     return name.strip() or "Uncategorized"
 
 
+# ---------------------------------------------------------------------------
+# Orbund Allowed File Types & MIME Types
+# ---------------------------------------------------------------------------
+
+ORBUND_ALLOWED_FILE_TYPES: dict[str, str] = {
+    'txt': 'text/plain',
+    'png': 'image/png',
+    'jpeg': 'image/jpeg',
+    'doc': 'application/msword',
+    'pdf': 'application/pdf',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls': 'application/vnd.ms-excel',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'ppt': 'application/vnd.ms-powerpoint',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'jpg': 'image/jpeg',
+    'gif': 'image/gif',
+    'ico': 'image/x-icon',
+    'bmp': 'image/x-ms-bmp',
+    'svg': 'image/svg+xml',
+    'tif': 'image/tiff',
+    'tiff': 'image/tiff',
+    'mp3': 'audio/mpeg',
+    'ogg': 'audio/ogg',
+    'm4a': 'audio/mp4',
+    'flv': 'video/x-flv',
+    'm4v': 'video/mp4',
+    'mp4': 'video/mp4',
+    'mpeg': 'video/mpeg',
+    'mpg': 'video/mpeg',
+    '3gpp': 'video/3gpp',
+    '3gp': 'video/3gpp',
+    'avi': 'video/x-msvideo',
+    'mov': 'video/quicktime',
+    'wmv': 'video/x-ms-wmv',
+    'rar': 'application/x-rar-compressed',
+    'pkt': 'application/octet-stream',
+    'ai': 'application/postscript',
+    'psd': 'application/octet-stream',
+    'indd': 'application/octet-stream',
+    'sketch': 'application/octet-stream',
+    'fig': 'application/octet-stream',
+    'xd': 'application/octet-stream',
+    'dwg': 'application/octet-stream',
+    'dxf': 'application/octet-stream',
+    'qbm': 'application/octet-stream',
+    'qbw': 'application/octet-stream',
+}
+
+ORBUND_ALLOWED_EXTENSIONS: set[str] = set(ORBUND_ALLOWED_FILE_TYPES.keys())
+
+
+def extract_file_extension(filename_or_ext: str) -> str:
+    """Extract lowercased extension without leading dot from filename, path, or extension string."""
+    if not filename_or_ext:
+        return ''
+    s = filename_or_ext.strip().lower()
+    if '.' in s:
+        return s.rsplit('.', 1)[1].strip()
+    return s.strip()
+
+
+def is_orbund_allowed_file_type(filename_or_ext: str) -> bool:
+    """Return True if the given filename or extension is accepted by Orbund."""
+    return extract_file_extension(filename_or_ext) in ORBUND_ALLOWED_EXTENSIONS
+
+
+def get_orbund_mime_type(filename_or_ext: str) -> str | None:
+    """Return the Orbund MIME type for a given filename or extension, or None if disallowed."""
+    return ORBUND_ALLOWED_FILE_TYPES.get(extract_file_extension(filename_or_ext))
+
+
 def sanitize_upload_filename(filename: str) -> str:
-    """Normalize filenames that have multiple dots (e.g. ``a.b.pdf`` → ``a_b.pdf``)
-    and remove characters that break web portal multipart/SQL storage (such as single quotes / apostrophes).
-    Keeps the final extension, replaces dots in the base name with underscores."""
+    """Sanitize and normalize a filename for reliable upload to Orbund & web portals.
+
+    * Transliterates non-ASCII Unicode characters to plain ASCII equivalents (e.g. ``é`` → ``e``, ``ñ`` → ``n``).
+    * Removes characters that break web portal multipart/SQL storage (single/double quotes, apostrophes, backticks).
+    * Replaces dots in the base name with underscores to avoid multiple dots triggering portal malformed errors.
+    * Replaces unsafe/illegal punctuation and control characters with underscores.
+    * Normalizes spaces and collapses consecutive underscores.
+    * Enforces safe length cap (<= 100 characters for base name).
+    * Returns the cleaned filename with a normalized lowercase extension.
+    """
+    if not filename:
+        return "file"
+    filename = filename.strip()
     if '.' in filename:
         base, ext = filename.rsplit('.', 1)
-        base = base.replace('.', '_').replace("'", "")
+        ext = ext.strip().lower()
+    else:
+        base, ext = filename, ''
+
+    # Normalize unicode characters to closest ASCII equivalent (e.g. accents: é -> e, ñ -> n)
+    base = unicodedata.normalize('NFKD', base)
+    base = base.encode('ascii', 'ignore').decode('ascii')
+
+    # Common readable character replacements
+    base = base.replace('&', 'and').replace('@', 'at')
+
+    # Strip quote variations completely
+    for q in ("'", '"', '`', '\u2018', '\u2019', '\u201c', '\u201d'):
+        base = base.replace(q, '')
+
+    # Replace invalid/problematic characters with underscores (including dots, slashes, colons, etc.)
+    base = re.sub(r'[^A-Za-z0-9_-]+', '_', base)
+
+    # Collapse multiple consecutive underscores / hyphens
+    base = re.sub(r'[-_]{2,}', '_', base)
+    base = re.sub(r'_+', '_', base)
+
+    # Strip leading/trailing underscores, hyphens, dots, spaces
+    base = base.strip('_-. ')
+
+    if not base:
+        base = "file"
+    if len(base) > 100:
+        base = base[:100].rstrip('_-. ')
+        if not base:
+            base = "file"
+
+    if ext:
         return f"{base}.{ext}"
-    return filename.replace("'", "")
+    return base
 
 
 # ---------------------------------------------------------------------------

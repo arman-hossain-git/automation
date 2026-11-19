@@ -9,6 +9,7 @@ Antigravity IDE Design System styling.
 """
 
 import os
+import re
 import threading
 import datetime
 import tkinter as tk
@@ -20,11 +21,14 @@ from ui.theme import (
     ACCENT_SUCCESS, ACCENT_SUCCESS_HOVER,
     ACCENT_DANGER, ACCENT_DANGER_HOVER,
     ACCENT_INFO, ACCENT_INFO_HOVER,
-    FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_SMALL_BOLD, FONT_SMALL, FONT_LOG
+    FONT_TITLE, FONT_SUBTITLE, FONT_BODY, FONT_BODY_BOLD, FONT_SMALL_BOLD, FONT_SMALL, FONT_LOG,
+    get_log_tag_color
 )
 from core.utils import format_timedelta, format_bytes, format_speed_bps, format_time_remaining
 from core.settings_manager import settings
 from ui.time_series_graph import TimeSeriesTelemetryGraph
+
+_LOG_TAG_REGEX = re.compile(r"^(\s*)\[([A-Za-z0-9_\-/\s]+)\]")
 
 
 class QueueTask:
@@ -440,6 +444,10 @@ class BaseToolFrame(tk.Frame):
         self.txt_log.tag_config("WARNING", foreground="#d29922")
         self.txt_log.tag_config("ERROR", foreground="#f85149")
         self.txt_log.tag_config("DEBUG", foreground="#8b949e")
+        self.txt_log.tag_config("SUCCESS", foreground=ACCENT_SUCCESS)
+        self.txt_log.tag_config("DANGER", foreground=ACCENT_DANGER)
+        self.txt_log.tag_config("MUTED", foreground=TEXT_MUTED)
+        self._configured_log_tags: set = set()
 
         log_controls = tk.Frame(log_container, bg=BG_CARD)
         log_controls.pack(fill="x", pady=(4, 0))
@@ -652,7 +660,35 @@ class BaseToolFrame(tk.Frame):
     def log(self, level: str, message: str):
         def append():
             self.txt_log.configure(state='normal')
-            self.txt_log.insert('end', f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [{level.upper():<7}] {message}\n", level.upper())
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+            lvl = level.upper()
+            self.txt_log.insert('end', f"[{timestamp}] ", "MUTED")
+            self.txt_log.insert('end', f"[{lvl:<7}] ", lvl)
+
+            curr = message
+            while True:
+                m = _LOG_TAG_REGEX.match(curr)
+                if not m:
+                    break
+                tag_name = m.group(2).strip()
+                if tag_name.isdigit() or re.match(r"^\d+/\d+$", tag_name):
+                    break
+                indent = m.group(1)
+                if indent:
+                    self.txt_log.insert('end', indent)
+
+                tag_key = f"TAG_{tag_name.upper()}"
+                if not hasattr(self, "_configured_log_tags"):
+                    self._configured_log_tags = set()
+                if tag_key not in self._configured_log_tags:
+                    color = get_log_tag_color(tag_name)
+                    self.txt_log.tag_config(tag_key, foreground=color)
+                    self._configured_log_tags.add(tag_key)
+
+                self.txt_log.insert('end', f"[{tag_name}]", tag_key)
+                curr = curr[m.end():]
+
+            self.txt_log.insert('end', f"{curr}\n")
             self.txt_log.see('end')
             self.txt_log.configure(state='disabled')
 

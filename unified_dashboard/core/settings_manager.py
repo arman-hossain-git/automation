@@ -42,6 +42,13 @@ DEFAULT_SETTINGS = {
     "inter_task_inactivity_action": "close_app",
     # Color Scheme / Theme mode: 'system' (Same as local PC), 'dark', or 'light'
     "theme": "system",
+    # Orbund file type customization:
+    # - orbund_extra_extensions: user-added extensions {ext: mime_type} that Orbund has
+    #   started accepting. These are merged with the built-in list at runtime.
+    # - orbund_disabled_extensions: list of built-in extension strings the user wants to
+    #   temporarily disable (block from uploading). Does NOT delete the built-in entry.
+    "orbund_extra_extensions": {},
+    "orbund_disabled_extensions": [],
 }
 
 

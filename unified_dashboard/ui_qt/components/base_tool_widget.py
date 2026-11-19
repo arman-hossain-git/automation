@@ -14,6 +14,7 @@ Provides:
 
 import os
 import sys
+import re
 import glob
 import time
 import datetime
@@ -31,8 +32,12 @@ from PySide6.QtGui import QTextCursor, QColor, QTextCharFormat, QFont
 from ui_qt.theme import (
     BG_BASE, BG_CARD, BG_CARD_ALT, BG_INPUT, BG_CONSOLE, BORDER_SUBTLE, BORDER_MUTED,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    ACCENT_PRIMARY, ACCENT_SUCCESS, ACCENT_WARNING, ACCENT_DANGER, ACCENT_INFO
+    ACCENT_PRIMARY, ACCENT_SUCCESS, ACCENT_WARNING, ACCENT_DANGER, ACCENT_INFO,
+    get_log_tag_color
 )
+
+# Regex to match leading bracketed category tags in messages (e.g. "[SESSION]", "  [TAB]")
+_LOG_TAG_REGEX = re.compile(r"^(\s*)\[([A-Za-z0-9_\-/\s]+)\]")
 from ui_qt.components.badge import StatusBadge, MetricCard
 from ui_qt.components.time_series_graph import TimeSeriesTelemetryGraph
 from ui_qt.components.inter_task_dialog import InterTaskDialog
@@ -623,11 +628,35 @@ class BaseToolWidget(QWidget):
         self.txt_console.setCurrentCharFormat(tf)
         self.txt_console.insertPlainText(f"[{level.upper()}] ")
 
-        # Message
+        # Parse and highlight any bracketed category tags at the start of the message
+        curr = message
+        while True:
+            m = _LOG_TAG_REGEX.match(curr)
+            if not m:
+                break
+            tag_name = m.group(2).strip()
+            # Skip numeric brackets like [1] or [1/10]
+            if tag_name.isdigit() or re.match(r"^\d+/\d+$", tag_name):
+                break
+            indent = m.group(1)
+            if indent:
+                tf.setForeground(QColor("#D4D4D4"))
+                tf.setFontWeight(QFont.Weight.Normal)
+                self.txt_console.setCurrentCharFormat(tf)
+                self.txt_console.insertPlainText(indent)
+
+            tag_color = get_log_tag_color(tag_name)
+            tf.setForeground(QColor(tag_color))
+            tf.setFontWeight(QFont.Weight.Bold)
+            self.txt_console.setCurrentCharFormat(tf)
+            self.txt_console.insertPlainText(f"[{tag_name}]")
+            curr = curr[m.end():]
+
+        # Remaining message body
         tf.setForeground(QColor("#D4D4D4"))
         tf.setFontWeight(QFont.Weight.Normal)
         self.txt_console.setCurrentCharFormat(tf)
-        self.txt_console.insertPlainText(f"{message}\n")
+        self.txt_console.insertPlainText(f"{curr}\n")
 
         self.txt_console.moveCursor(QTextCursor.MoveOperation.End)
 

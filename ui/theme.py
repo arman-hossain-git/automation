@@ -85,6 +85,99 @@ LIGHT_PALETTE = {
     "BORDER_FOCUS": "#0969da",
 }
 
+# ---------------------------------------------------------------------------
+# Distinct Log Category & Subsystem Tag Colors
+# ---------------------------------------------------------------------------
+LOG_TAG_COLORS = {
+    # Severity & Status Level
+    "INFO": "#388bfd",                # Electric Blue
+    "SUCCESS": "#238636",             # Emerald Green
+    "WARNING": "#d29922",             # Amber
+    "ERROR": "#f85149",               # Coral Red
+    "DEBUG": "#8b949e",               # Slate Grey
+    "DANGER": "#da3633",              # Danger Red
+
+    # Session & State Management
+    "SESSION": "#38BDF8",             # Sky Blue
+    "SESSION RECOVERY": "#2DD4BF",    # Bright Teal
+    "SETTINGS": "#818CF8",            # Indigo
+    "HISTORY": "#A5B4FC",             # Lavender
+
+    # Audit Subsystem
+    "AUDIT": "#C084FC",               # Purple
+    "AUDIT VERIFIED": "#34D399",      # Emerald
+    "VERIFIED": "#34D399",
+    "AUDIT COMPLETE": "#4ADE80",      # Bright Green
+    "COMPLETE": "#4ADE80",
+    "AUDIT MISSING": "#FB7185",       # Rose Red
+    "MISSING": "#FB7185",
+    "AUDIT MISMATCH": "#FB923C",      # Orange
+    "MISMATCH": "#FB923C",
+    "AUDIT CLEANUP": "#E879F9",       # Fuchsia
+    "CLEANUP": "#E879F9",
+    "AUDIT REMEDIATION": "#FACC15",   # Sunflower Gold
+    "REMEDIATION": "#FACC15",
+
+    # File & Checksum Verification
+    "CHECKSUM MATCH": "#22C55E",      # Vivid Green
+    "CONTENT MISMATCH": "#F97316",    # Dark Orange
+    "SKIP": "#94A3B8",                # Cool Slate
+    "SANITIZE": "#06B6D4",            # Cyan / Turquoise
+    "MISPLACED FILE": "#F87171",      # Coral / Salmon
+    "REMOVE WRONG FILE": "#EF4444",   # Signal Red
+    "REMOVED": "#F43F5E",             # Crimson
+    "RECOVERED": "#A3E635",           # Lime Green
+
+    # Intelligence & Learning
+    "LEARNING": "#A855F7",            # Electric Violet
+    "ML TUNING": "#D8B4FE",           # Soft Purple
+
+    # Navigation & Driving
+    "NAV": "#60A5FA",                 # Dodger Blue
+    "NAV-CONFIRM": "#38BDF8",         # Sky Blue
+    "RETURN": "#3B82F6",              # Royal Blue
+    "TAB": "#7DD3FC",                 # Ice Blue
+    "AUTO-DETECT": "#67E8F9",         # Aquamarine
+    "MODE": "#0EA5E9",                # Ocean Blue
+    "GENERIC": "#64748B",             # Muted Slate
+
+    # Network, Security & Health
+    "NETWORK DISRUPTION": "#FBBF24",  # Amber Warning
+    "NETWORK": "#FDE047",             # Lemon Yellow
+    "SECURITY GUARD": "#FF2E63",      # Neon Alert Red
+    "RETRY": "#F59E0B",               # Amber Gold
+    "RECOVERY": "#FB923C",            # Bright Orange
+    "FALLBACK": "#EA580C",            # Burnt Orange
+    "PARALLEL": "#6366F1",            # Indigo Violet
+    "ORBUND REJECTION": "#EF4444",    # Red Alert
+    "REJECTION": "#EF4444",
+    "UNHANDLED ERROR": "#FF0055",     # Fluorescent Red
+
+    # Queue & Verification
+    "QUEUE": "#14B8A6",               # Teal Green
+    "VERIFY": "#10B981",              # Emerald Green
+    "LOG": "#94A3B8",                 # Cool Slate
+
+    # PDF Extractor Modes
+    "STUDENT_SCHEDULE": "#93C5FD",    # Soft Blue
+    "STUDENT_TRANSCRIPT": "#5EEAD4",  # Soft Teal
+    "ATTENDANCE_ROSTER": "#86EFAC",   # Soft Green
+}
+
+FALLBACK_TAG_PALETTE = [
+    "#38BDF8", "#34D399", "#FBBF24", "#F472B6", "#A78BFA",
+    "#4ADE80", "#FB923C", "#2DD4BF", "#E879F9", "#60A5FA"
+]
+
+
+def get_log_tag_color(tag_name: str) -> str:
+    """Return a unique, high-contrast hex color for a log tag string with deterministic fallback."""
+    cleaned = tag_name.strip().upper()
+    if cleaned in LOG_TAG_COLORS:
+        return LOG_TAG_COLORS[cleaned]
+    h = sum(ord(c) for c in cleaned)
+    return FALLBACK_TAG_PALETTE[h % len(FALLBACK_TAG_PALETTE)]
+
 
 def get_effective_theme_mode(mode: str | None = None) -> str:
     """Resolves 'system', 'dark', or 'light' into either 'dark' or 'light'."""

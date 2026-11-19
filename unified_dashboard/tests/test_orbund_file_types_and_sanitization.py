@@ -379,5 +379,168 @@ class TestFileUploaderDisallowedFileTypeSkipping(unittest.TestCase):
         self.assertTrue(len(rejection_logs) > 0, "Should have logged [ORBUND REJECTION]")
 
 
+class TestEffectiveOrbundExtensions(unittest.TestCase):
+    """Test that user Settings (extra extensions + disabled extensions) are
+    correctly merged with the built-in list at runtime."""
+
+    def _reset_settings(self):
+        """Helper: clear user customisations so tests start clean."""
+        from core.settings_manager import settings
+        settings.set("orbund_extra_extensions", {})
+        settings.set("orbund_disabled_extensions", [])
+
+    def setUp(self):
+        self._reset_settings()
+
+    def tearDown(self):
+        self._reset_settings()
+
+    # Import helpers inside test so we always get the live module state
+    def _helpers(self):
+        from core.utils import (
+            get_effective_orbund_extensions,
+            get_effective_orbund_allowed_set,
+            is_orbund_allowed_file_type,
+            get_orbund_mime_type,
+        )
+        return get_effective_orbund_extensions, get_effective_orbund_allowed_set, is_orbund_allowed_file_type, get_orbund_mime_type
+
+    # ------------------------------------------------------------------
+    # get_effective_orbund_extensions / get_effective_orbund_allowed_set
+    # ------------------------------------------------------------------
+
+    def test_defaults_equal_builtin(self):
+        """With no customisation, effective set == built-in set."""
+        get_effective_orbund_extensions, get_effective_orbund_allowed_set, _, _ = self._helpers()
+        effective = get_effective_orbund_extensions()
+        self.assertEqual(set(effective.keys()), set(ORBUND_ALLOWED_FILE_TYPES.keys()))
+
+    def test_user_added_extension_appears_in_effective(self):
+        """Adding 'webp' via settings makes it appear in the effective set."""
+        from core.settings_manager import settings
+        get_effective_orbund_extensions, get_effective_orbund_allowed_set, is_allowed, _ = self._helpers()
+
+        settings.set("orbund_extra_extensions", {"webp": "image/webp"})
+        effective = get_effective_orbund_extensions()
+        self.assertIn("webp", effective)
+        self.assertEqual(effective["webp"], "image/webp")
+        self.assertIn("webp", get_effective_orbund_allowed_set())
+        self.assertTrue(is_allowed("webp"))
+        self.assertTrue(is_allowed("logo.webp"))
+
+    def test_user_added_extension_mime_defaults(self):
+        """Adding an extension with blank MIME defaults to application/octet-stream."""
+        from core.settings_manager import settings
+        get_effective_orbund_extensions, _, _, _ = self._helpers()
+
+        settings.set("orbund_extra_extensions", {"xyz": ""})
+        effective = get_effective_orbund_extensions()
+        self.assertEqual(effective.get("xyz"), "application/octet-stream")
+
+    def test_user_added_mime_returned_by_get_orbund_mime_type(self):
+        """get_orbund_mime_type honours user-added extensions."""
+        from core.settings_manager import settings
+        _, _, _, get_mime = self._helpers()
+
+        settings.set("orbund_extra_extensions", {"webp": "image/webp"})
+        self.assertEqual(get_mime("image.webp"), "image/webp")
+
+    def test_disabled_builtin_excluded_from_effective(self):
+        """Disabling 'exe' (hypothetical) or a real built-in like 'rar' removes it from effective set."""
+        from core.settings_manager import settings
+        _, get_allowed_set, is_allowed, get_mime = self._helpers()
+
+        settings.set("orbund_disabled_extensions", ["rar"])
+        allowed_set = get_allowed_set()
+        self.assertNotIn("rar", allowed_set)
+        self.assertFalse(is_allowed("rar"))
+        self.assertFalse(is_allowed("archive.rar"))
+        self.assertIsNone(get_mime("archive.rar"))
+
+    def test_disabled_builtin_does_not_affect_other_builtins(self):
+        """Disabling one built-in should not affect unrelated built-ins."""
+        from core.settings_manager import settings
+        _, _, is_allowed, _ = self._helpers()
+
+        settings.set("orbund_disabled_extensions", ["rar"])
+        self.assertTrue(is_allowed("pdf"))
+        self.assertTrue(is_allowed("docx"))
+        self.assertTrue(is_allowed("mp4"))
+
+    def test_disabled_builtin_does_not_mutate_constant(self):
+        """ORBUND_ALLOWED_FILE_TYPES must remain intact regardless of Settings."""
+        from core.settings_manager import settings
+        settings.set("orbund_disabled_extensions", ["pdf", "docx", "png"])
+        # Static constant unchanged
+        self.assertIn("pdf",  ORBUND_ALLOWED_FILE_TYPES)
+        self.assertIn("docx", ORBUND_ALLOWED_FILE_TYPES)
+        self.assertIn("png",  ORBUND_ALLOWED_FILE_TYPES)
+        self.assertEqual(len(ORBUND_ALLOWED_FILE_TYPES), 42)
+
+    def test_multiple_user_extensions_all_appear(self):
+        """Multiple user-added extensions are all included."""
+        from core.settings_manager import settings
+        _, get_set, _, _ = self._helpers()
+
+        extras = {"webp": "image/webp", "heic": "image/heic", "avif": "image/avif"}
+        settings.set("orbund_extra_extensions", extras)
+        allowed = get_set()
+        for ext in extras:
+            self.assertIn(ext, allowed)
+
+    def test_user_added_extension_case_insensitive(self):
+        """User-added extensions stored uppercase are still normalised to lowercase."""
+        from core.settings_manager import settings
+        get_effective_orbund_extensions, _, _, _ = self._helpers()
+
+        # Simulate user typing 'WEBP' — settings stores it raw; get_effective normalises
+        settings.set("orbund_extra_extensions", {"WEBP": "image/webp"})
+        effective = get_effective_orbund_extensions()
+        # The key should be normalised to lowercase during merge
+        self.assertIn("webp", effective)
+
+    # ------------------------------------------------------------------
+    # Learning engine immunity for user-added types
+    # ------------------------------------------------------------------
+
+    def test_learning_engine_does_not_blacklist_user_added_extension(self):
+        """Extensions added via Settings must be immune from the learning engine blacklist."""
+        from core.settings_manager import settings
+        settings.set("orbund_extra_extensions", {"webp": "image/webp"})
+
+        url = "https://bcc.orbundsis.com/login"
+        # Simulate an upload failure for a user-added type
+        learning_engine.record_rejected_file_type(url, "webp")
+        # It must NOT be recorded as rejected
+        self.assertFalse(learning_engine.is_file_type_rejected(url, "webp"),
+                         "User-added 'webp' was wrongly blacklisted by the learning engine")
+        self.assertNotIn("webp", learning_engine.get_rejected_file_types(url))
+
+    def test_learning_engine_still_blacklists_truly_disallowed_types(self):
+        """Types not in built-in OR user list must still be learned as rejected."""
+        from core.settings_manager import settings
+        settings.set("orbund_extra_extensions", {})  # no extras
+
+        url = "https://bcc.orbundsis.com/login"
+        learning_engine.record_rejected_file_type(url, "exe")
+        self.assertTrue(learning_engine.is_file_type_rejected(url, "exe"))
+        self.assertIn("exe", learning_engine.get_rejected_file_types(url))
+
+    def test_re_enabling_disabled_builtin_restores_learning_immunity(self):
+        """After re-enabling a disabled built-in, the learning engine should NOT blacklist it."""
+        from core.settings_manager import settings
+        # First disable 'rar' so it's not in the effective set
+        settings.set("orbund_disabled_extensions", ["rar"])
+        url = "https://bcc.orbundsis.com/login"
+        # Record rejection while disabled — this SHOULD write it (it's not in effective set)
+        learning_engine.record_rejected_file_type(url, "rar")
+
+        # Now re-enable 'rar'
+        settings.set("orbund_disabled_extensions", [])
+        # After re-enabling, is_file_type_rejected must return False (immunity restored)
+        self.assertFalse(learning_engine.is_file_type_rejected(url, "rar"),
+                         "'rar' should be immune after being re-enabled in Settings")
+
+
 if __name__ == "__main__":
     unittest.main()

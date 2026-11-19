@@ -8,7 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QCheckBox, QComboBox, QGroupBox, QFrame, QScrollArea, QPushButton,
-    QMessageBox, QFileDialog, QSpinBox
+    QMessageBox, QFileDialog, QSpinBox, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QSizePolicy
 )
 from ui_qt.theme import (
     BG_BASE, BG_CARD, BG_CARD_ALT, BORDER_SUBTLE,
@@ -16,6 +17,7 @@ from ui_qt.theme import (
     ACCENT_PRIMARY, ACCENT_SUCCESS, ACCENT_WARNING
 )
 from core.settings_manager import settings
+from core.utils import ORBUND_ALLOWED_FILE_TYPES
 
 THEME_MAP = {
     "Same as Local PC (System)": "system",
@@ -170,7 +172,67 @@ class SettingsView(QWidget):
 
         scroll_layout.addWidget(grp_dirs)
 
-        # --- Group 5: Appearance ---
+        # --- Group 5: Orbund Allowed File Types ---
+        grp_orbund = QGroupBox("🗂️  Orbund Allowed File Types")
+        g5_outer = QVBoxLayout(grp_orbund)
+        g5_outer.setSpacing(8)
+
+        lbl_orbund_info = QLabel(
+            "Orbund only accepts specific file types. The list below shows all currently allowed types.\n"
+            "Built-in types are enforced by default. Use the toggle to disable one temporarily.\n"
+            "Add new types as Orbund expands support — they are saved to your preferences."
+        )
+        lbl_orbund_info.setWordWrap(True)
+        lbl_orbund_info.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY};")
+        g5_outer.addWidget(lbl_orbund_info)
+
+        # Table: Extension | MIME Type | Source | Enabled
+        self._orbund_table = QTableWidget()
+        self._orbund_table.setColumnCount(4)
+        self._orbund_table.setHorizontalHeaderLabels(["Extension", "MIME Type", "Source", "Enabled"])
+        self._orbund_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._orbund_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._orbund_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._orbund_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self._orbund_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._orbund_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._orbund_table.setAlternatingRowColors(True)
+        self._orbund_table.verticalHeader().setVisible(False)
+        self._orbund_table.setMinimumHeight(220)
+        self._orbund_table.setMaximumHeight(360)
+        self._orbund_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        g5_outer.addWidget(self._orbund_table)
+
+        # Row count label
+        self._lbl_orbund_count = QLabel()
+        self._lbl_orbund_count.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED};")
+        g5_outer.addWidget(self._lbl_orbund_count)
+
+        # Add-new-type row
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        self._txt_new_ext = QLineEdit()
+        self._txt_new_ext.setPlaceholderText("ext  (e.g. webp)")
+        self._txt_new_ext.setMaximumWidth(90)
+        self._txt_new_mime = QLineEdit()
+        self._txt_new_mime.setPlaceholderText("MIME type  (e.g. image/webp)  — optional")
+        btn_add_ext = QPushButton("➕  Add Extension")
+        btn_add_ext.setCursor(Qt.PointingHandCursor)
+        btn_add_ext.setObjectName("btn_success")
+        btn_add_ext.clicked.connect(self._add_orbund_extension)
+        add_row.addWidget(QLabel("New extension:"))
+        add_row.addWidget(self._txt_new_ext)
+        add_row.addWidget(QLabel("MIME:"))
+        add_row.addWidget(self._txt_new_mime, stretch=1)
+        add_row.addWidget(btn_add_ext)
+        g5_outer.addLayout(add_row)
+
+        scroll_layout.addWidget(grp_orbund)
+
+        # Populate the table now
+        self._populate_orbund_table()
+
+        # --- Group 6: Appearance ---
         grp_theme = QGroupBox("🎨  Appearance")
         g5 = QHBoxLayout(grp_theme)
         g5.setSpacing(12)
@@ -230,6 +292,10 @@ class SettingsView(QWidget):
         settings.set("confirm_on_abort", self.chk_confirm_abort.isChecked())
         settings.set("default_download_dir", self.txt_default_dir.text().strip())
         settings.set("theme", THEME_MAP.get(self.combo_theme.currentText(), "system"))
+
+        # Orbund file type table → persist disabled built-ins and user-added extras
+        self._collect_orbund_table_state()
+
         settings.save()
         QMessageBox.information(self, "Settings Saved", "Preferences have been saved successfully.")
 
@@ -259,3 +325,141 @@ class SettingsView(QWidget):
         self.combo_log_level.setCurrentText(settings.get("log_level", "INFO"))
         self.chk_confirm_abort.setChecked(settings.get("confirm_on_abort", True))
         self.txt_default_dir.setText(settings.get("default_download_dir", ""))
+        # Repopulate Orbund table from current settings
+        self._populate_orbund_table()
+
+    # ------------------------------------------------------------------
+    # Orbund file-type table helpers
+    # ------------------------------------------------------------------
+
+    def _populate_orbund_table(self):
+        """Fill the Orbund file-type table from ORBUND_ALLOWED_FILE_TYPES + user additions."""
+        disabled: list = settings.get("orbund_disabled_extensions", []) or []
+        extra: dict = settings.get("orbund_extra_extensions", {}) or {}
+
+        self._orbund_table.setRowCount(0)
+
+        # 1. Built-in extensions (sorted)
+        for ext in sorted(ORBUND_ALLOWED_FILE_TYPES.keys()):
+            mime = ORBUND_ALLOWED_FILE_TYPES[ext]
+            self._add_orbund_table_row(ext, mime, is_builtin=True,
+                                       enabled=(ext not in disabled))
+
+        # 2. User-added extensions (sorted)
+        for ext in sorted(extra.keys()):
+            mime = extra[ext] or "application/octet-stream"
+            self._add_orbund_table_row(ext, mime, is_builtin=False, enabled=True)
+
+        total = self._orbund_table.rowCount()
+        builtin_count = len(ORBUND_ALLOWED_FILE_TYPES)
+        user_count = len(extra)
+        self._lbl_orbund_count.setText(
+            f"{total} types total  ({builtin_count} built-in, {user_count} user-added)"
+        )
+
+    def _add_orbund_table_row(self, ext: str, mime: str, is_builtin: bool, enabled: bool):
+        """Append one row to the Orbund file-type table."""
+        row = self._orbund_table.rowCount()
+        self._orbund_table.insertRow(row)
+
+        # Col 0: extension
+        item_ext = QTableWidgetItem(f".{ext}")
+        item_ext.setTextAlignment(Qt.AlignCenter)
+        self._orbund_table.setItem(row, 0, item_ext)
+
+        # Col 1: MIME type
+        self._orbund_table.setItem(row, 1, QTableWidgetItem(mime))
+
+        # Col 2: source label
+        source_lbl = "Built-in" if is_builtin else "User-added"
+        item_src = QTableWidgetItem(source_lbl)
+        item_src.setTextAlignment(Qt.AlignCenter)
+        if not is_builtin:
+            item_src.setForeground(Qt.darkGreen)
+        self._orbund_table.setItem(row, 2, item_src)
+
+        # Col 3: checkbox (enable/disable) OR remove button for user-added
+        if is_builtin:
+            chk = QCheckBox()
+            chk.setChecked(enabled)
+            chk.setToolTip("Uncheck to temporarily block this built-in type from uploading")
+            cell_widget = QWidget()
+            cell_layout = QHBoxLayout(cell_widget)
+            cell_layout.addWidget(chk)
+            cell_layout.setAlignment(Qt.AlignCenter)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            self._orbund_table.setCellWidget(row, 3, cell_widget)
+        else:
+            btn_remove = QPushButton("✕  Remove")
+            btn_remove.setToolTip(f"Remove user-added extension .{ext}")
+            btn_remove.setCursor(Qt.PointingHandCursor)
+            btn_remove.setStyleSheet("color: #c0392b; font-size: 11px;")
+            # Capture ext in closure
+            btn_remove.clicked.connect(lambda checked=False, e=ext: self._remove_orbund_extension(e))
+            self._orbund_table.setCellWidget(row, 3, btn_remove)
+
+    def _collect_orbund_table_state(self):
+        """Read table checkboxes and persist disabled built-ins to settings."""
+        disabled = []
+        for row in range(self._orbund_table.rowCount()):
+            src_item = self._orbund_table.item(row, 2)
+            if src_item and src_item.text() == "Built-in":
+                ext_item = self._orbund_table.item(row, 0)
+                cell_w = self._orbund_table.cellWidget(row, 3)
+                if ext_item and cell_w:
+                    chk = cell_w.findChild(QCheckBox)
+                    if chk and not chk.isChecked():
+                        ext = ext_item.text().lstrip('.')
+                        if ext:
+                            disabled.append(ext)
+        settings.set("orbund_disabled_extensions", sorted(disabled))
+
+    def _add_orbund_extension(self):
+        """Validate and add a new user extension to settings + table."""
+        import re
+        raw_ext = self._txt_new_ext.text().strip().lower().lstrip('.')
+        raw_mime = self._txt_new_mime.text().strip()
+
+        if not raw_ext:
+            QMessageBox.warning(self, "Invalid Extension", "Please enter an extension (e.g. 'webp').")
+            return
+
+        if not re.fullmatch(r'[a-z0-9]{1,20}', raw_ext):
+            QMessageBox.warning(
+                self, "Invalid Extension",
+                f"'{raw_ext}' is not a valid extension.\n"
+                "Use only lowercase letters and digits (1–20 chars), no dot or spaces."
+            )
+            return
+
+        if raw_ext in ORBUND_ALLOWED_FILE_TYPES:
+            QMessageBox.information(
+                self, "Already Built-in",
+                f".{raw_ext} is already in the built-in Orbund list.\n"
+                "To re-enable it, check its checkbox in the table."
+            )
+            return
+
+        extra: dict = dict(settings.get("orbund_extra_extensions", {}) or {})
+        if raw_ext in extra:
+            QMessageBox.information(
+                self, "Already Added",
+                f".{raw_ext} is already in your user-added list."
+            )
+            return
+
+        mime = raw_mime if raw_mime else "application/octet-stream"
+        extra[raw_ext] = mime
+        settings.set("orbund_extra_extensions", extra)
+        # Repopulate table to reflect the new entry
+        self._populate_orbund_table()
+        self._txt_new_ext.clear()
+        self._txt_new_mime.clear()
+
+    def _remove_orbund_extension(self, ext: str):
+        """Remove a user-added extension from settings and refresh table."""
+        extra: dict = dict(settings.get("orbund_extra_extensions", {}) or {})
+        if ext in extra:
+            del extra[ext]
+            settings.set("orbund_extra_extensions", extra)
+        self._populate_orbund_table()

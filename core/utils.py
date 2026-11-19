@@ -173,14 +173,48 @@ def extract_file_extension(filename_or_ext: str) -> str:
     return s.strip()
 
 
+def get_effective_orbund_extensions() -> dict[str, str]:
+    """Return the merged, runtime-effective map of allowed Orbund extensions → MIME types.
+
+    Computation (in order):
+      1. Start with built-in ``ORBUND_ALLOWED_FILE_TYPES`` (never mutated).
+      2. Remove any extensions the user has explicitly disabled in Settings.
+      3. Merge in any extra extensions the user has added in Settings.
+
+    This is recomputed on every call so Settings changes are picked up
+    immediately without an app restart.  The underlying constants are
+    never modified.
+    """
+    try:
+        from core.settings_manager import settings
+        disabled: list = settings.get("orbund_disabled_extensions", []) or []
+        extra: dict = settings.get("orbund_extra_extensions", {}) or {}
+    except Exception:
+        disabled = []
+        extra = {}
+
+    effective = {k: v for k, v in ORBUND_ALLOWED_FILE_TYPES.items()
+                 if k not in disabled}
+    for ext, mime in extra.items():
+        ext_clean = ext.strip().lower().lstrip('.')
+        if ext_clean:
+            effective[ext_clean] = mime or 'application/octet-stream'
+    return effective
+
+
+def get_effective_orbund_allowed_set() -> set[str]:
+    """Return the set of extension strings currently allowed by Orbund (built-in + user additions, minus disabled)."""
+    return set(get_effective_orbund_extensions().keys())
+
+
 def is_orbund_allowed_file_type(filename_or_ext: str) -> bool:
-    """Return True if the given filename or extension is accepted by Orbund."""
-    return extract_file_extension(filename_or_ext) in ORBUND_ALLOWED_EXTENSIONS
+    """Return True if the given filename or extension is accepted by Orbund (respects user Settings)."""
+    return extract_file_extension(filename_or_ext) in get_effective_orbund_allowed_set()
 
 
 def get_orbund_mime_type(filename_or_ext: str) -> str | None:
-    """Return the Orbund MIME type for a given filename or extension, or None if disallowed."""
-    return ORBUND_ALLOWED_FILE_TYPES.get(extract_file_extension(filename_or_ext))
+    """Return the Orbund MIME type for a given filename or extension, or None if disallowed (respects user Settings)."""
+    return get_effective_orbund_extensions().get(extract_file_extension(filename_or_ext))
 
 
 def sanitize_upload_filename(filename: str) -> str:

@@ -51,6 +51,7 @@ class GradeView(BaseToolWidget):
         m_layout.setSpacing(8)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(24)
         self.rb_submit = QRadioButton("Submit Grades (Post final grades, dates & scores)")
         self.rb_unsubmit = QRadioButton("Un-submit Grades (Revert status, Mark 'No')")
         self.rb_submit.setChecked(True)

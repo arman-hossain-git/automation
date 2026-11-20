@@ -56,8 +56,7 @@ The **Unified System Automation Suite** replaces these repetitive manual tasks w
 
 | Feature | Description |
 | :--- | :--- |
-| **📥 Web File Exporter** | Automates downloading transcripts, action files, and documents from student profile portals with auto-detection or preset scrapers. |
-| **📤 Batch File Uploader** | Navigates student profile folders and batch-uploads categorized local files directly into portal document systems. |
+| **📁 Unified File Management** | 3-way automation suite supporting Web File Export, Batch File Upload, and an End-to-End Pipeline that exports and uploads in a continuous workflow with parallel workers. |
 | **🎓 Dynamic Grade Submission** | Submits final grade flags, dates, and scores with automatic detection between score input fields and grade dropdowns. |
 | **📄 PDF → Excel Extractor** | Parses folders of identically formatted PDFs (transcripts, schedules, ledgers) into structured `.xlsx` workbooks using JSON recipes. |
 | **🔄 Adaptive Dataset Harmonizer** | Multi-source schema matcher and combiner (Union/Join) that reshapes raw datasets to match sample schemas with persistent feedback learning. |
@@ -256,31 +255,20 @@ Source_Directory/
 
 ## 📖 How to Use the Modules
 
-### 📥 Module 1: File Exporter
-Scrapes and exports documents from student profiles into a structured local directory.
-1. Open **File Exporter** from the left navigation bar.
-2. Select your `credentials.txt` and `Record Links CSV`.
-3. Select a **Save Files Directory** where downloaded files should be stored.
-4. Select an **Exporter Preset**:
-   - `Dynamic Scraper (Auto-detect)`: Scrapes tables and links on any portal.
-   - `PCR Action Files (Admissions)`: Downloads admissions action files.
-   - `PCR Dashboard Files (Main)`: Scrapes files directly from student document dashboards.
-   - `MyPath Document Generator`: Automates dropdown selections, clicking "Generate", and capturing PDF preview modals.
-5. Click **▶ Start Automation**.
-6. When finished, click **✓ Verify Results** to cross-examine downloaded files against `automation_execution_log.csv`.
+### 📁 Module 1: Unified File Management (Export, Upload & Pipeline)
+Combines Web File Exporter, Batch File Uploader, and an automated two-stage Pipeline into a single interface with 3 operation modes and parallel worker acceleration:
 
----
-
-### 📤 Module 2: File Uploader
-Uploads local documents into portal document management folders (such as *Files & Documents*).
-1. Open **File Uploader**.
-2. Select your `credentials.txt` and `Student Links CSV`.
-3. Choose your **Source Directory** containing the student ID folders.
-4. Choose your **Target Folder**:
-   - `(None)`: Uploads to the root of *Files & Documents*.
-   - Specific Category: e.g., `Admissions Inquiry`, `Students Inquiry`.
-   - Custom Subfolder: Specify a new folder name to auto-create and populate.
-5. Click **▶ Start Automation**.
+1. **📥 Mode 1: File Exporter (Download Only)**:
+   - Scrapes and downloads transcripts, action files, and documents from student profile portals into structured local folders.
+   - Configure credentials, links CSV, and save directory.
+2. **📤 Mode 2: File Uploader (Upload Only)**:
+   - Navigates student profile folders and batch-uploads categorized local files directly into portal document systems.
+   - Configure credentials, links CSV, source directory, and target portal folder.
+3. **🔄 Mode 3: Export & Upload Pipeline (Combined Sync)**:
+   - Automated end-to-end sync: downloads documents from the source portal into a staging directory and immediately uploads them to the target portal.
+   - Set **Parallel Chrome Workers** (e.g. 5–10 instances) to accelerate both stages sequentially.
+   - Option to automatically delete staging files after successful upload.
+4. Click **▶ Start Automation** to run sequentially or with parallel workers.
 
 ---
 

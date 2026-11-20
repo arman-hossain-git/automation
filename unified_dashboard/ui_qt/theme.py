@@ -429,6 +429,26 @@ def get_global_stylesheet() -> str:
         border: 1px solid {ACCENT_SUCCESS};
     }}
 
+    /* --- Radio Buttons --- */
+    QRadioButton {{
+        color: {TEXT_PRIMARY};
+        spacing: 8px;
+    }}
+    QRadioButton::indicator {{
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        border: 1px solid {BORDER_SUBTLE};
+        background: {BG_INPUT};
+    }}
+    QRadioButton::indicator:hover {{
+        border: 1px solid {BORDER_FOCUS};
+    }}
+    QRadioButton::indicator:checked {{
+        background: {ACCENT_SUCCESS};
+        border: 1px solid {ACCENT_SUCCESS};
+    }}
+
     /* --- Splitters --- */
     QSplitter::handle {{
         background-color: {BORDER_SUBTLE};

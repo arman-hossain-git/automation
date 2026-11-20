@@ -89,7 +89,7 @@ class TestPySide6UISmokeTests(unittest.TestCase):
         self._skip_if_no_app()
         from ui_qt.main_window import MainWindow
         window = MainWindow()
-        standalone = ["home", "grades", "pdf_extractor", "documentation", "settings"]
+        standalone = ["home", "files", "grades", "pdf_extractor", "documentation", "settings"]
         for tid in standalone:
             try:
                 window.navigate_to(tid)

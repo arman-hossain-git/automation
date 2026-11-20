@@ -26,6 +26,7 @@ from ui_qt.theme import (
     get_global_stylesheet
 )
 from ui_qt.views.home_view import HomeView
+from ui_qt.views.files_view import FilesView
 from ui_qt.views.file_exporter_view import FileExporterView
 from ui_qt.views.file_uploader_view import FileUploaderView
 from ui_qt.views.grade_view import GradeView
@@ -204,10 +205,14 @@ class LazyViewDict(dict):
         super().__init__()
         self._main_window = main_window
         self._registered_keys = {
-            "home", "file_exporter", "file_uploader",
+            "home", "files", "file_exporter", "file_uploader", "file_pipeline",
             "grades", "student_removal", "field_updater", "pdf_extractor", "data_harmonizer", "learning",
             "documentation", "settings"
         }
+
+    def is_instantiated(self, key: str) -> bool:
+        """Check if a view widget has already been instantiated in the dictionary."""
+        return super().__contains__(key)
 
     def __contains__(self, key):
         return key in self._registered_keys or super().__contains__(key)
@@ -343,11 +348,7 @@ class MainWindow(QMainWindow):
                 "id": "files",
                 "icon": "📁",
                 "title": "Files",
-                "subtitle": "Export or upload student files",
-                "sub_features": [
-                    {"id": "file_exporter", "icon": "📥", "title": "File Exporter", "desc": "Scrape & export files from PCR"},
-                    {"id": "file_uploader", "icon": "📤", "title": "File Uploader", "desc": "Upload files into PCR folders"},
-                ],
+                "subtitle": "Export, upload & pipeline sync",
             },
             {
                 "id": "grades",
@@ -455,6 +456,22 @@ class MainWindow(QMainWindow):
 
     def _create_view(self, view_id: str):
         """Creates a view widget and adds it to the stacked layout."""
+        if view_id in ("files", "file_exporter", "file_uploader", "file_pipeline"):
+            for k in ("files", "file_exporter", "file_uploader", "file_pipeline"):
+                if dict.__contains__(self._views, k):
+                    return dict.__getitem__(self._views, k)
+            try:
+                view = FilesView()
+                self.stack.addWidget(view)
+                for k in ("files", "file_exporter", "file_uploader", "file_pipeline"):
+                    dict.__setitem__(self._views, k, view)
+                return view
+            except Exception as e:
+                import traceback
+                err_details = traceback.format_exc()
+                print(f"[ERROR] Failed to load FilesView for '{view_id}': {err_details}", file=sys.stderr)
+                return None
+
         view_factories = {
             "home": HomeView,
             "file_exporter": FileExporterView,

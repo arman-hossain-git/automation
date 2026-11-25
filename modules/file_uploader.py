@@ -48,6 +48,7 @@ from core.selenium_helpers import (
     compute_portal_folder_sha256_batch,
     click_folder_by_name,
     delete_portal_file_by_name,
+    remove_destination_duplicate_files_by_sha256,
     detect_unsupported_format_error,
     detect_malformed_filename_error,
     get_dialog_signatures,
@@ -60,6 +61,8 @@ from core.selenium_helpers import (
 )
 from core.utils import (
     compute_file_sha256,
+    deduplicate_local_files_by_sha256,
+    is_duplicate_filename_pattern,
     sanitize_upload_filename,
     list_category_folders,
     filter_valid_students,
@@ -466,6 +469,62 @@ class FileUploader:
 
                             local_file_hashes = {}  # In-memory cache for local src_path -> sha256
 
+                            # --- STEP 0: DEDUPLICATE SOURCE FILES BY SHA-256 ---
+                            # "when uploading files if there are two files in the source location with diffrent names but their sha-256 are identical then the automation should upload the first one only."
+                            if not self._allow_duplicates:
+                                unique_local_files, local_duplicates, cat_hashes = deduplicate_local_files_by_sha256(
+                                    category['files'], category['path'], log_func=self._log
+                                )
+                                local_file_hashes.update(cat_hashes)
+
+                                for dup_fn, dup_info in local_duplicates.items():
+                                    dup_size = dup_info.get('size', 0)
+                                    dup_hash = dup_info.get('sha256', '')
+                                    first_fn = dup_info.get('first_file', '')
+                                    files_done += 1
+                                    bytes_done_overall += dup_size
+                                    self._log('info', f"[LOCAL CONTENT DUPLICATE] '{dup_fn}' in '{category['name'] or 'Root'}' has identical SHA-256 ({dup_hash[:10]}...) to earlier file '{first_fn}' — uploading first file only, skipping duplicate.")
+                                    batch_logs.append({
+                                        'studentId':     student_id,
+                                        'category':      category['name'] or '(root)',
+                                        'fileName':      dup_fn,
+                                        'uploadedAs':    sanitize_upload_filename(dup_fn),
+                                        'action':        'skipped_duplicate_hash',
+                                        'actionComment': f"Identical SHA-256 ({dup_hash[:10]}...) to local file '{first_fn}'. Uploading first file only.",
+                                        'validation':    'duplicate_sha256_local',
+                                        'timestamp':     datetime.datetime.now().isoformat(timespec='seconds'),
+                                    })
+                                    self._on_progress({
+                                        'type': 'file_done',
+                                        'file_name': dup_fn,
+                                        'file_size': dup_size,
+                                        'files_done': total_uploaded,
+                                        'files_total': total_files_overall,
+                                        'bytes_done': bytes_done_overall,
+                                        'total_bytes': total_bytes_overall,
+                                        'student_files_done': files_done,
+                                        'student_files_total': total_files,
+                                    })
+                                category['files'] = unique_local_files
+
+                            # Remove duplicate SHA-256 files on the destination page:
+                            # "If there is files like these in the destination page remove the later ones."
+                            if not self._allow_duplicates and len(current_portal_files) > 1:
+                                current_portal_files = remove_destination_duplicate_files_by_sha256(
+                                    driver, wait, config, current_portal_files,
+                                    portal_session=portal_session,
+                                    portal_file_hashes=portal_file_hashes,
+                                    preferred_names=set(category['files']),
+                                    student_id=student_id,
+                                    category_name=category['name'] or '(root)',
+                                    batch_logs=batch_logs,
+                                    log_func=self._log
+                                )
+                                portal_file_map = {cf['name'].strip().lower(): cf for cf in current_portal_files}
+                                portal_file_sanitized_map = {sanitize_upload_filename(cf['name']).strip().lower(): cf for cf in current_portal_files}
+                                portal_file_names_clean = {cf['name'].strip().lower(): cf for cf in current_portal_files}
+                                portal_file_sanitized_clean = {sanitize_upload_filename(cf['name']).strip().lower(): cf for cf in current_portal_files}
+
                             # Expected files for this folder
                             expected_files = category['files']
                             expected_clean_map = {f.strip().lower(): f for f in expected_files}
@@ -718,11 +777,22 @@ class FileUploader:
                                                 if portal_hash:
                                                     portal_file_hashes[cf_href] = portal_hash
                                             if portal_hash and portal_hash == local_hash:
-                                                already_on_destination = True
-                                                skip_reason = f"Content matched existing file '{cf.get('name')}' via SHA-256 checksum ({local_hash[:10]}...)"
-                                                skip_validation = "verified_sha256"
-                                                self._log('info', f"[CHECKSUM MATCH] '{file_name}' content (SHA-256: {local_hash[:10]}...) is identical to portal file '{cf.get('name')}' — skipping duplicate upload.")
-                                                break
+                                                cf_n = cf.get('name', '')
+                                                if is_duplicate_filename_pattern(cf_n) and not is_duplicate_filename_pattern(file_name):
+                                                    self._log('warning', f"[LATER DUPLICATE REPLACED] Portal file '{cf_n}' has duplicate suffix while local file '{file_name}' is canonical (identical SHA-256). Removing '{cf_n}' from destination...")
+                                                    deleted = delete_portal_file_by_name(driver, wait, cf_n, config, download_href=cf_href, log_func=self._log)
+                                                    if deleted:
+                                                        portal_file_map.pop(cf_n.strip().lower(), None)
+                                                        portal_file_sanitized_map.pop(sanitize_upload_filename(cf_n).strip().lower(), None)
+                                                        portal_file_hashes.pop(cf_href, None)
+                                                        current_portal_files = [f for f in current_portal_files if f.get('name') != cf_n]
+                                                        already_on_destination = False
+                                                else:
+                                                    already_on_destination = True
+                                                    skip_reason = f"Content matched existing file '{cf_n}' via SHA-256 checksum ({local_hash[:10]}...)"
+                                                    skip_validation = "verified_sha256"
+                                                    self._log('info', f"[CHECKSUM MATCH] '{file_name}' content (SHA-256: {local_hash[:10]}...) is identical to portal file '{cf_n}' — skipping duplicate upload.")
+                                                    break
 
                                     # 3. Fallback: check table snapshot / DOM listing
                                     if not already_on_destination:
@@ -1939,8 +2009,21 @@ class FileUploader:
                     except Exception as be:
                         self._log('debug', f"Audit SHA-256 batch notice: {be}")
 
+                unique_expected, _, _ = deduplicate_local_files_by_sha256(expected_files, cat_info['path'], log_func=self._log)
+                expected_files = unique_expected
                 expected_clean_map = {f.strip().lower(): f for f in expected_files}
                 expected_sanitized_clean_map = {sanitize_upload_filename(f).strip().lower(): f for f in expected_files}
+
+                if current_files and len(current_files) > 1:
+                    current_files = remove_destination_duplicate_files_by_sha256(
+                        driver, wait, config, current_files,
+                        portal_session=audit_session,
+                        portal_file_hashes=audit_portal_hashes,
+                        preferred_names=set(expected_files),
+                        student_id=student_id,
+                        category_name=folder_name,
+                        log_func=self._log
+                    )
 
                 # 2A. Delete files that do NOT belong in this folder
                 for cf in current_files:
@@ -2053,7 +2136,8 @@ class FileUploader:
 
             folder_name = category['name']
             fn_clean = folder_name.strip().lower()
-            expected_files = category['files']
+            unique_expected, _, _ = deduplicate_local_files_by_sha256(category['files'], category['path'], log_func=self._log)
+            expected_files = unique_expected
 
             if fn_clean in processed_categories or not expected_files:
                 continue
@@ -2425,6 +2509,31 @@ class FileUploader:
         strategies.append(("configured xpath", self._click_via_configured_xpath))
         strategies.append(("text match", self._click_via_text_match))
 
+        # Initial student portal page load
+        driver.get(link)
+        wait_for_page_ready(driver, timeout=15)
+
+        # FAST-PATH: Direct DOM Scan
+        # In Orbund and similar portals, the Files & Documents direct URL (complete with
+        # student param token) is often already present in an <a> tag in the DOM.
+        # Direct navigation to it bypasses menu animation/hover races entirely.
+        try:
+            direct_href = self._find_direct_files_docs_link(driver)
+            if direct_href:
+                self._log('debug', f"Student {student_id}: direct DOM link found: {direct_href}")
+                driver.get(direct_href)
+                wait_for_page_ready(driver, timeout=15)
+                candidate_url = driver.current_url
+                if self._is_files_documents_url(candidate_url):
+                    self._log('info', f"Student {student_id}: direct DOM navigation to Files & Documents succeeded: {candidate_url}")
+                    learning_engine.record_successful_xpath(login_url, 'files_documents_menu_href', direct_href)
+                    learning_engine.record_domain_strategy(login_url, 'files_documents_last_successful_strategy', 'direct_dom_link')
+                    return candidate_url
+                else:
+                    self._log('debug', f"Direct DOM link landed on unexpected URL: {candidate_url} — falling back to menu strategies.")
+        except Exception as fp_err:
+            self._log('debug', f"Direct DOM fast-path notice: {describe_exception(fp_err)}")
+
         files_docs_root_url = None
         last_error = None
         matched_href = None
@@ -2433,13 +2542,17 @@ class FileUploader:
         for attempt_idx, (strategy_name, strategy_fn) in enumerate(strategies):
             try:
                 self._log('debug', f"Loading student {student_id} portal (attempt {attempt_idx + 1}: {strategy_name}).")
-                driver.get(link)
-                wait_for_page_ready(driver, timeout=15)
+                if driver.current_url != link:
+                    driver.get(link)
+                    wait_for_page_ready(driver, timeout=15)
 
                 # 3-dot menu: hover-aware opener -- avoids the hover-then-click
                 # race that was silently re-closing the menu on this site.
-                open_dropdown_menu(driver, wait, config['three_dot_menu_xpath'],
-                                    "3-dot menu", timeout_override=20, log_func=self._log)
+                try:
+                    open_dropdown_menu(driver, wait, config.get('three_dot_menu_xpath', ''),
+                                        "3-dot menu", timeout_override=10, log_func=self._log)
+                except Exception as menu_err:
+                    self._log('debug', f"3-dot menu open notice: {describe_exception(menu_err)} — proceeding to strategy execution.")
 
                 clicked_href = strategy_fn(driver, wait, config)
                 wait_for_page_ready(driver, timeout=15)
@@ -2586,9 +2699,59 @@ class FileUploader:
 
         self._log('error', f"[NAV] FAILED to navigate inside '{target_folder_name}' after 3 attempts for student {student_id}.")
 
+    def _find_direct_files_docs_link(self, driver) -> str | None:
+        """Scan current DOM (and iframes if needed) for any anchor link pointing to Files & Documents."""
+        from selenium.webdriver.common.by import By as _By
+        xpath = (
+            "//a[contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'files_and_documents') "
+            "or contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'files_documents') "
+            "or contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'file_and_documents') "
+            "or contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'filesanddocuments')]"
+        )
+        try:
+            candidates = driver.find_elements(_By.XPATH, xpath)
+            for el in candidates:
+                try:
+                    href = el.get_attribute('href')
+                    if href and ('files' in href.lower() or 'document' in href.lower()):
+                        return href
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Also check inside iframes if not found in root document
+        try:
+            iframes = driver.find_elements(_By.TAG_NAME, "iframe")
+            for idx in range(len(iframes)):
+                try:
+                    driver.switch_to.frame(idx)
+                    candidates = driver.find_elements(_By.XPATH, xpath)
+                    for el in candidates:
+                        try:
+                            href = el.get_attribute('href')
+                            if href and ('files' in href.lower() or 'document' in href.lower()):
+                                driver.switch_to.default_content()
+                                return href
+                        except Exception:
+                            pass
+                    driver.switch_to.default_content()
+                except Exception:
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        pass
+        except Exception:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+        return None
+
     @staticmethod
     def _is_files_documents_url(url: str) -> bool:
-        u = url.lower()
+        u = (url or '').lower()
         return 'files' in u or 'document' in u
 
     def _click_via_href_match(self, driver, wait, config: dict, href_fragment: str | None = None) -> str:
@@ -2601,6 +2764,7 @@ class FileUploader:
         exact fragment is tried. Otherwise a small set of common filename
         fragments is tried.
         """
+        import time as _time
         from selenium.webdriver.support.ui import WebDriverWait as WDW
         from selenium.webdriver.support import expected_conditions as _EC
         from selenium.webdriver.common.by import By as _By
@@ -2617,25 +2781,70 @@ class FileUploader:
             raise Exception("No href fragment available for href-match strategy.")
         text_xpath = f"//a[{or_clauses}]"
 
-        WDW(driver, 8, poll_frequency=0.2).until(
-            _EC.presence_of_element_located((_By.XPATH, text_xpath))
-        )
-        candidates = driver.find_elements(_By.XPATH, text_xpath)
-        visible = [el for el in candidates if el.is_displayed()]
-        if not visible:
-            raise Exception("Href-match strategy found no visible Files & Documents link.")
+        try:
+            WDW(driver, 6, poll_frequency=0.2).until(
+                _EC.presence_of_element_located((_By.XPATH, text_xpath))
+            )
+        except Exception:
+            pass
 
-        target = visible[0]
+        candidates = driver.find_elements(_By.XPATH, text_xpath)
+        if not candidates:
+            # Check inside iframes as fallback
+            try:
+                iframes = driver.find_elements(_By.TAG_NAME, "iframe")
+                for idx in range(len(iframes)):
+                    try:
+                        driver.switch_to.frame(idx)
+                        candidates = driver.find_elements(_By.XPATH, text_xpath)
+                        if candidates:
+                            break
+                        driver.switch_to.default_content()
+                    except Exception:
+                        try:
+                            driver.switch_to.default_content()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        if not candidates:
+            raise Exception("Href-match strategy found no Files & Documents link in DOM.")
+
+        visible = [el for el in candidates if el.is_displayed()]
+        target = visible[0] if visible else candidates[0]
         href = ''
         try:
             href = target.get_attribute('href') or ''
         except Exception:
             pass
-        self._log('debug', f"Href-match found Files & Documents menu item: '{href}'")
+        self._log('debug', f"Href-match found Files & Documents menu item: '{href}' (is_displayed={bool(visible)})")
+
+        clicked = False
+        if visible:
+            try:
+                target.click()
+                clicked = True
+            except Exception:
+                pass
+        if not clicked:
+            try:
+                driver.execute_script("arguments[0].click();", target)
+                clicked = True
+            except Exception:
+                pass
+
+        if href and ('files' in href.lower() or 'document' in href.lower()):
+            _time.sleep(0.5)
+            if not self._is_files_documents_url(driver.current_url):
+                self._log('debug', f"Click did not trigger navigation; navigating directly to href: {href}")
+                driver.get(href)
+
         try:
-            target.click()
+            driver.switch_to.default_content()
         except Exception:
-            driver.execute_script("arguments[0].click();", target)
+            pass
+
         return href
 
     def _click_via_configured_xpath(self, driver, wait, config: dict) -> str:
@@ -2646,7 +2855,7 @@ class FileUploader:
             raise Exception("No 'files_documents_menu_xpath' configured.")
         el = click_xpath(driver, wait, configured_xpath,
                           "'Files & Documents' menu item (configured xpath)",
-                          timeout_override=20, log_func=self._log)
+                          timeout_override=10, log_func=self._log)
         try:
             return el.get_attribute('href') or ''
         except Exception:
@@ -2660,6 +2869,7 @@ class FileUploader:
         that was the original cause of clicks landing on Comments/Correspondence
         pages, before the href-match strategy above existed.
         """
+        import time as _time
         from selenium.webdriver.support.ui import WebDriverWait as WDW
         from selenium.webdriver.support import expected_conditions as _EC
         from selenium.webdriver.common.by import By as _By
@@ -2674,27 +2884,74 @@ class FileUploader:
             "]"
         )
 
-        WDW(driver, 12, poll_frequency=0.2).until(
-            _EC.presence_of_element_located((_By.XPATH, text_xpath))
-        )
+        try:
+            WDW(driver, 6, poll_frequency=0.2).until(
+                _EC.presence_of_element_located((_By.XPATH, text_xpath))
+            )
+        except Exception:
+            pass
+
         candidates = driver.find_elements(_By.XPATH, text_xpath)
+        if not candidates:
+            # Check inside iframes as fallback
+            try:
+                iframes = driver.find_elements(_By.TAG_NAME, "iframe")
+                for idx in range(len(iframes)):
+                    try:
+                        driver.switch_to.frame(idx)
+                        candidates = driver.find_elements(_By.XPATH, text_xpath)
+                        if candidates:
+                            break
+                        driver.switch_to.default_content()
+                    except Exception:
+                        try:
+                            driver.switch_to.default_content()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        if not candidates:
+            raise Exception("Text-match strategy found no 'Files & Documents' link in DOM.")
+
         visible = [el for el in candidates if el.is_displayed()]
-        if not visible:
-            raise Exception("Text-match strategy found no visible 'Files & Documents' link.")
+        target_pool = visible if visible else candidates
 
         # Prefer the shortest matching text -- the tightest match to the
         # literal menu label, in case more than one anchor qualifies.
-        target = min(visible, key=lambda el: len(el.text.strip() or el.get_attribute('textContent') or ''))
+        target = min(target_pool, key=lambda el: len(el.text.strip() or el.get_attribute('textContent') or ''))
         href = ''
         try:
             href = target.get_attribute('href') or ''
         except Exception:
             pass
-        self._log('debug', f"Text-match found Files & Documents menu item: '{target.text.strip()}'")
+        self._log('debug', f"Text-match found Files & Documents menu item: '{target.text.strip()}' (is_displayed={bool(visible)})")
+
+        clicked = False
+        if visible:
+            try:
+                target.click()
+                clicked = True
+            except Exception:
+                pass
+        if not clicked:
+            try:
+                driver.execute_script("arguments[0].click();", target)
+                clicked = True
+            except Exception:
+                pass
+
+        if href and ('files' in href.lower() or 'document' in href.lower()):
+            _time.sleep(0.5)
+            if not self._is_files_documents_url(driver.current_url):
+                self._log('debug', f"Click did not trigger navigation; navigating directly to href: {href}")
+                driver.get(href)
+
         try:
-            target.click()
+            driver.switch_to.default_content()
         except Exception:
-            driver.execute_script("arguments[0].click();", target)
+            pass
+
         return href
 
     def _suggest_locator_from_dom(self, driver) -> str:

@@ -54,6 +54,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from core.chrome_driver import launch_chrome_driver, build_download_options, safe_quit_driver
 from core.settings_manager import settings
@@ -65,7 +66,7 @@ from core.selenium_helpers import (
 )
 from core.utils import sanitize_filename, filter_valid_students, build_output_path, new_run_id, find_latest_run_log
 from core.learning_system import learning_engine
-from core.session_manager import SessionManager, process_item_with_retry
+from core.session_manager import SessionManager, process_item_with_retry, BrowserSessionError, is_dead_session_error
 
 MODULE_ID = "file_exporter"
 
@@ -1100,6 +1101,7 @@ class FileExporter:
         if relaunch_budget <= 0:
             self._log('error', f"Browser session crashed: {err}. No relaunches left this run -- stopping.")
             return None
+        # Clean up the dead/orphaned driver first
         try:
             safe_quit_driver(old_driver)
         except Exception:
@@ -2798,17 +2800,27 @@ class FileExporter:
             return 'downloaded'
 
         try:
-            if os.path.exists(target_path):
-                if _file_content_hash(target_path) == _file_content_hash(downloaded_path):
+            downloaded_hash = _file_content_hash(downloaded_path)
+            try:
+                downloaded_size = os.path.getsize(downloaded_path)
+            except OSError:
+                downloaded_size = 0
+
+            # SHA-256 deduplication check: inspect folder for any file with identical content
+            matched_file = self._find_existing_sha256_match(
+                folder_path, downloaded_hash, downloaded_size, safe_name, exclude_path=downloaded_path
+            )
+            if matched_file:
+                try:
                     os.remove(downloaded_path)
-                    self._log('info', f"Native download for '{file_name}' matched existing file; "
-                                       f"removed duplicate.")
-                    return 'duplicate'
-                base, ext = os.path.splitext(safe_name)
-                counter = 1
-                while os.path.exists(target_path):
-                    target_path = os.path.join(folder_path, f"{base}__{counter + 1}{ext}")
-                    counter += 1
+                except Exception:
+                    pass
+                matched_name = os.path.basename(matched_file)
+                self._log('info', f"Native download for '{file_name}' matched existing file '{matched_name}' "
+                                   f"via SHA-256 ({downloaded_hash[:10]}...); removed duplicate.")
+                return 'duplicate'
+
+            target_path = self._get_unique_target_path(folder_path, safe_name)
             os.rename(downloaded_path, target_path)
         except Exception as e:
             self._log('warning', f"Could not rename native download '{downloaded_path}' to "
@@ -2817,6 +2829,28 @@ class FileExporter:
 
         self._log('info', f"Recovered native download for '{file_name}' -> {target_path}")
         return 'downloaded'
+
+    def _find_existing_sha256_match(
+        self,
+        folder_path: str,
+        incoming_sha256: str,
+        incoming_size: int,
+        safe_name: str,
+        exclude_path: str | None = None
+    ) -> str | None:
+        """Check if any file in folder_path has identical SHA-256 to incoming_sha256."""
+        return _find_matching_sha256_file(
+            folder_path,
+            incoming_sha256,
+            incoming_size,
+            safe_name,
+            exclude_path=exclude_path,
+            log_func=self._log
+        )
+
+    def _get_unique_target_path(self, folder_path: str, safe_name: str) -> str:
+        """Return an unused target path in folder_path for safe_name, appending __N if needed."""
+        return _get_unique_target_path(folder_path, safe_name)
 
     def _get_open_dialog_signatures(self, driver) -> set:
         """Returns a frozenset of (aria-labelledby|id, display-state) tuples
@@ -3272,17 +3306,20 @@ class FileExporter:
                 safe_name += MIME_TO_EXT.get(mime_type.lower(), "")
 
             os.makedirs(folder_path, exist_ok=True)
-            out_path = os.path.join(folder_path, safe_name)
+            new_hash = hashlib.sha256(file_bytes).hexdigest()
+            new_size = len(file_bytes)
 
-            if os.path.exists(out_path):
-                if _file_content_hash(out_path) == hashlib.md5(file_bytes).hexdigest():
-                    return 'duplicate'
-                base, ext = os.path.splitext(safe_name)
-                counter = 1
-                while os.path.exists(out_path):
-                    out_path = os.path.join(folder_path, f"{base}__{counter + 1}{ext}")
-                    counter += 1
+            # SHA-256 deduplication check: inspect folder for any file with identical content
+            matched_file = self._find_existing_sha256_match(
+                folder_path, new_hash, new_size, safe_name
+            )
+            if matched_file:
+                matched_name = os.path.basename(matched_file)
+                self._log('info', f"Fetched content for '{file_name}' matched existing file '{matched_name}' "
+                                   f"via SHA-256 ({new_hash[:10]}...); skipping duplicate download.")
+                return 'duplicate'
 
+            out_path = self._get_unique_target_path(folder_path, safe_name)
             with open(out_path, 'wb') as out_f:
                 out_f.write(file_bytes)
             return 'downloaded'
@@ -3474,8 +3511,89 @@ def _dedup(items: list) -> list:
 
 
 def _file_content_hash(path: str) -> str:
-    h = hashlib.md5()
+    """Compute and return the SHA-256 hex digest of a file's content."""
+    h = hashlib.sha256()
     with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
+        for chunk in iter(lambda: f.read(65536), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _find_matching_sha256_file(
+    folder_path: str,
+    incoming_sha256: str,
+    incoming_size: int,
+    safe_name: str,
+    exclude_path: str | None = None,
+    log_func=None
+) -> str | None:
+    """Check if any file in folder_path has identical SHA-256 to incoming_sha256.
+
+    Pre-filters by byte size to avoid unnecessary disk I/O.
+    Returns the path of the matching file, or None if no duplicate exists.
+    """
+    if not os.path.isdir(folder_path):
+        return None
+
+    base, ext = os.path.splitext(safe_name)
+    clean_base = re.sub(r'__\d+$', '', base)
+    clean_name = f"{clean_base}{ext}"
+
+    # 1. Direct target file match
+    direct_path = os.path.join(folder_path, safe_name)
+    if os.path.isfile(direct_path) and (not exclude_path or os.path.abspath(direct_path) != os.path.abspath(exclude_path)):
+        try:
+            if os.path.getsize(direct_path) == incoming_size:
+                if _file_content_hash(direct_path) == incoming_sha256:
+                    return direct_path
+        except OSError:
+            pass
+
+    # 2. Canonical un-suffixed file match
+    clean_path = os.path.join(folder_path, clean_name)
+    if clean_path != direct_path and os.path.isfile(clean_path) and (not exclude_path or os.path.abspath(clean_path) != os.path.abspath(exclude_path)):
+        try:
+            if os.path.getsize(clean_path) == incoming_size:
+                if _file_content_hash(clean_path) == incoming_sha256:
+                    return clean_path
+        except OSError:
+            pass
+
+    # 3. Check all other files in folder_path with identical byte size
+    try:
+        for fname in os.listdir(folder_path):
+            if fname.endswith(('.crdownload', '.tmp', '.part')):
+                continue
+            fpath = os.path.join(folder_path, fname)
+            if exclude_path and os.path.abspath(fpath) == os.path.abspath(exclude_path):
+                continue
+            if fpath in (direct_path, clean_path):
+                continue
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                if os.path.getsize(fpath) == incoming_size:
+                    if _file_content_hash(fpath) == incoming_sha256:
+                        return fpath
+            except OSError:
+                continue
+    except Exception as e:
+        if log_func:
+            log_func('debug', f"Error scanning folder '{folder_path}' for SHA-256 deduplication: {e}")
+
+    return None
+
+
+def _get_unique_target_path(folder_path: str, safe_name: str) -> str:
+    """Return an unused target path in folder_path for safe_name, appending __N if needed."""
+    target_path = os.path.join(folder_path, safe_name)
+    if not os.path.exists(target_path):
+        return target_path
+    base, ext = os.path.splitext(safe_name)
+    clean_base = re.sub(r'__\d+$', '', base)
+    counter = 1
+    while True:
+        counter += 1
+        candidate_path = os.path.join(folder_path, f"{clean_base}__{counter}{ext}")
+        if not os.path.exists(candidate_path):
+            return candidate_path

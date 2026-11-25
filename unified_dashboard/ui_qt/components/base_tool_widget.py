@@ -220,6 +220,15 @@ class BaseToolWidget(QWidget):
 
         h_layout.addLayout(title_vbox, stretch=1)
 
+        # Queue progress badge — clearly displays active task and count at top of dashboard
+        self.lbl_queue_badge = QLabel("")
+        self.lbl_queue_badge.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; color: #a5b4fc; background-color: #1e1b4b; "
+            f"border: 1px solid #4338ca; border-radius: 6px; padding: 4px 12px; margin-right: 6px;"
+        )
+        self.lbl_queue_badge.setVisible(False)
+        h_layout.addWidget(self.lbl_queue_badge, alignment=Qt.AlignVCenter)
+
         self.badge_status = StatusBadge("Ready", "neutral")
         h_layout.addWidget(self.badge_status, alignment=Qt.AlignVCenter)
         root_layout.addWidget(hdr_frame)
@@ -461,24 +470,26 @@ class BaseToolWidget(QWidget):
             return val
 
         # Left column – Workload & Volume Metrics (Dedicated fields for Students, Rows, Files, Size)
-        self.kpi_students         = _make_kpi_row(kpi_grid, 0, 0, "Students Processed:")
-        self.kpi_rows             = _make_kpi_row(kpi_grid, 1, 0, "CSV Rows / Records:")
-        self.kpi_files_done       = _make_kpi_row(kpi_grid, 2, 0, "Total Files Processed:")
-        self.kpi_student_files    = _make_kpi_row(kpi_grid, 3, 0, "Current Student Files:")
-        self.kpi_data_volume      = _make_kpi_row(kpi_grid, 4, 0, "Data Volume / Size:")
-        self.kpi_current_student  = _make_kpi_row(kpi_grid, 5, 0, "Current Student ID:")
-        self.kpi_current_category = _make_kpi_row(kpi_grid, 6, 0, "Current Stage / Folder:")
-        self.kpi_current_file     = _make_kpi_row(kpi_grid, 7, 0, "In-Flight File & Size:")
+        self.kpi_queue_progress   = _make_kpi_row(kpi_grid, 0, 0, "Queue Progress:")
+        self.kpi_students         = _make_kpi_row(kpi_grid, 1, 0, "Students Processed:")
+        self.kpi_rows             = _make_kpi_row(kpi_grid, 2, 0, "CSV Rows / Records:")
+        self.kpi_files_done       = _make_kpi_row(kpi_grid, 3, 0, "Total Files Processed:")
+        self.kpi_student_files    = _make_kpi_row(kpi_grid, 4, 0, "Current Student Files:")
+        self.kpi_data_volume      = _make_kpi_row(kpi_grid, 5, 0, "Data Volume / Size:")
+        self.kpi_current_student  = _make_kpi_row(kpi_grid, 6, 0, "Current Student ID:")
+        self.kpi_current_category = _make_kpi_row(kpi_grid, 7, 0, "Current Stage / Folder:")
+        self.kpi_current_file     = _make_kpi_row(kpi_grid, 8, 0, "In-Flight File & Size:")
 
         # Right column – Performance & Time KPIs
-        self.kpi_start_time      = _make_kpi_row(kpi_grid, 0, 1, "Automation Start:")
-        self.kpi_now_time        = _make_kpi_row(kpi_grid, 1, 1, "Current Date & Time:")
-        self.kpi_elapsed         = _make_kpi_row(kpi_grid, 2, 1, "Elapsed Duration:")
-        self.kpi_transfer_speed  = _make_kpi_row(kpi_grid, 3, 1, "Transfer Throughput:")
-        self.kpi_avg_speed       = _make_kpi_row(kpi_grid, 4, 1, "Item Processing Speed:")
-        self.kpi_eta             = _make_kpi_row(kpi_grid, 5, 1, "Est. Remaining & ETA:")
-        self.kpi_workers         = _make_kpi_row(kpi_grid, 6, 1, "Parallel Workers:")
-        self.kpi_errors          = _make_kpi_row(kpi_grid, 7, 1, "Errors Encountered:")
+        self.kpi_current_task    = _make_kpi_row(kpi_grid, 0, 1, "Active Task:")
+        self.kpi_start_time      = _make_kpi_row(kpi_grid, 1, 1, "Automation Start:")
+        self.kpi_now_time        = _make_kpi_row(kpi_grid, 2, 1, "Current Date & Time:")
+        self.kpi_elapsed         = _make_kpi_row(kpi_grid, 3, 1, "Elapsed Duration:")
+        self.kpi_transfer_speed  = _make_kpi_row(kpi_grid, 4, 1, "Transfer Throughput:")
+        self.kpi_avg_speed       = _make_kpi_row(kpi_grid, 5, 1, "Item Processing Speed:")
+        self.kpi_eta             = _make_kpi_row(kpi_grid, 6, 1, "Est. Remaining & ETA:")
+        self.kpi_workers         = _make_kpi_row(kpi_grid, 7, 1, "Parallel Workers:")
+        self.kpi_errors          = _make_kpi_row(kpi_grid, 8, 1, "Errors Encountered:")
 
         # Column sizing
         kpi_grid.setColumnMinimumWidth(0, 160)
@@ -990,6 +1001,28 @@ class BaseToolWidget(QWidget):
     def _refresh_kpi_display(self):
         """Synchronously update all KPI grid labels from current metric state."""
         try:
+            # 0. Queue Progress & Active Task
+            total_q = len(self.queue)
+            if total_q > 1 or (total_q == 1 and self.is_running):
+                cur_num = self.current_task_idx + 1 if 0 <= self.current_task_idx < total_q else 0
+                done_q = sum(1 for t in self.queue if t.status in ("Completed", "Failed", "Aborted", "Discarded"))
+                pending_q = sum(1 for t in self.queue if t.status == "Pending")
+                if cur_num > 0 and self.is_running:
+                    self.kpi_queue_progress.setText(f"Task {cur_num} of {total_q}  ({done_q} done, {pending_q} remaining)")
+                    active_label = self.queue[self.current_task_idx].label if 0 <= self.current_task_idx < len(self.queue) else "-"
+                    display_label = (active_label[:45] + "…") if len(active_label) > 48 else active_label
+                    self.kpi_current_task.setText(display_label)
+                    self.kpi_current_task.setToolTip(active_label)
+                elif done_q == total_q and total_q > 0:
+                    self.kpi_queue_progress.setText(f"All {total_q} tasks completed ({done_q} done)")
+                    self.kpi_current_task.setText("None (Queue finished)")
+                else:
+                    self.kpi_queue_progress.setText(f"{total_q} task(s) queued ({done_q} done, {pending_q} pending)")
+                    self.kpi_current_task.setText("-")
+            else:
+                self.kpi_queue_progress.setText("Single task (no queue)")
+                self.kpi_current_task.setText("-" if not self.is_running else "Single task running")
+
             # 1. Students Processed
             session_items = max(0, self.students_traversed - (self.students_base_offset or 0))
             if self.total_students > 0:
@@ -1512,10 +1545,51 @@ class BaseToolWidget(QWidget):
             item_ver.setTextAlignment(Qt.AlignCenter)
             self.table_queue.setItem(i, 3, item_ver)
 
+        total_q = len(self.queue)
         if not self.queue:
             self.lbl_queue_status.setText("Queue is empty (Single-task run if started without queueing)")
         else:
-            self.lbl_queue_status.setText(f"{len(self.queue)} task(s) queued")
+            cur_num = self.current_task_idx + 1 if 0 <= self.current_task_idx < total_q else 0
+            done_q = sum(1 for t in self.queue if t.status in ("Completed", "Failed", "Aborted", "Discarded"))
+            pending_q = sum(1 for t in self.queue if t.status == "Pending")
+            running_q = sum(1 for t in self.queue if t.status == "In Progress")
+            parts = [f"Total: {total_q}"]
+            if running_q > 0 and cur_num > 0:
+                parts.append(f"Running: Task {cur_num}")
+            if done_q > 0:
+                parts.append(f"Done: {done_q}")
+            if pending_q > 0:
+                parts.append(f"Pending: {pending_q}")
+            self.lbl_queue_status.setText("  |  ".join(parts))
+
+        self._update_queue_indicators()
+
+    def _update_queue_indicators(self):
+        """Update top header badge, tab text, and queue status label."""
+        total_q = len(self.queue)
+        if total_q > 1:
+            cur_num = self.current_task_idx + 1 if 0 <= self.current_task_idx < total_q else 0
+            done_q = sum(1 for t in self.queue if t.status in ("Completed", "Failed", "Aborted", "Discarded"))
+            pending_q = sum(1 for t in self.queue if t.status == "Pending")
+            if self.is_running and cur_num > 0:
+                self.lbl_queue_badge.setText(f"📋 Task {cur_num}/{total_q}  ({done_q} done · {pending_q} left)")
+                self.lbl_queue_badge.setVisible(True)
+                self.notebook.setTabText(1, f" 📊 Live Activity & Logs (Task {cur_num}/{total_q}) ")
+            elif done_q == total_q and total_q > 0:
+                self.lbl_queue_badge.setText(f"📋 All {total_q} tasks completed")
+                self.lbl_queue_badge.setVisible(True)
+                self.notebook.setTabText(1, " 📊 Live Activity & Logs ")
+            else:
+                self.lbl_queue_badge.setText(f"📋 Queue: {total_q} tasks ({done_q} done · {pending_q} pending)")
+                self.lbl_queue_badge.setVisible(True)
+                self.notebook.setTabText(1, " 📊 Live Activity & Logs ")
+        elif total_q == 1 and self.is_running:
+            self.lbl_queue_badge.setText("📋 Single Task Running")
+            self.lbl_queue_badge.setVisible(True)
+            self.notebook.setTabText(1, " 📊 Live Activity & Logs ")
+        else:
+            self.lbl_queue_badge.setVisible(False)
+            self.notebook.setTabText(1, " 📊 Live Activity & Logs ")
 
     # ------------------------------------------------------------------
     # Automation Execution Lifecycle
@@ -1566,6 +1640,15 @@ class BaseToolWidget(QWidget):
             self.bar_lbl_rows.setText("📑 Rows: 0 / 0 (0.0%)")
             self.bar_lbl_files.setText("📁 Files: 0 / 0 (0.0%)")
             self.bar_lbl_size.setText("💾 Size: 0 B / 0 B (0.0%)")
+        if hasattr(self, 'pb_students'):
+            self.pb_students.setValue(0)
+            self.pb_rows.setValue(0)
+            self.pb_files.setValue(0)
+            self.pb_size.setValue(0)
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setValue(0)
+        if hasattr(self, 'lbl_progress_percent'):
+            self.lbl_progress_percent.setText("0%")
 
     def start_automation(self):
         """Launches single or queued tasks."""
@@ -1624,7 +1707,25 @@ class BaseToolWidget(QWidget):
 
         task = self.queue[self.current_task_idx]
         task.status = "In Progress"
+
+        # ── Fresh per-task KPI & Telemetry Reset ──────────────────────────────
+        # Guarantees that when running multiple tasks in the queue, each task
+        # gets fresh KPI counters, clean progress bars, and its own real-time
+        # throughput telemetry time-series curve rather than retaining values
+        # from prior tasks.
+        self._reset_metrics()
+        self.start_time = datetime.datetime.now()
+        self.end_time = None
+        self.kpi_start_time.setText(self.start_time.strftime("%Y-%m-%d %H:%M:%S"))
+        self.kpi_elapsed.setText("00:00:00 (running)")
+        self.kpi_eta.setText("Calculating...")
+
+        # Reset real-time telemetry graph for the active task
+        unit_type = "bytes" if (self.tool_mode == "upload") else "items"
+        self.telemetry_graph.reset_graph(unit_type=unit_type)
+
         self._refresh_queue_table()
+        self._refresh_kpi_display()
         self.log(f"Starting Task {self.current_task_idx + 1} of {len(self.queue)}: {task.label}", "INFO")
 
         # Launch QThread worker
@@ -1740,6 +1841,8 @@ class BaseToolWidget(QWidget):
         if self._activity_logger is not None:
             self._activity_logger.close()
             self._activity_logger = None
+        self._update_queue_indicators()
+        self._refresh_kpi_display()
 
     def finish_all_tasks(self):
         self.is_running = False
@@ -1756,3 +1859,5 @@ class BaseToolWidget(QWidget):
         if self._activity_logger is not None:
             self._activity_logger.close()
             self._activity_logger = None
+        self._update_queue_indicators()
+        self._refresh_kpi_display()

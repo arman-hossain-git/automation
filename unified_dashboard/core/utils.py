@@ -17,12 +17,8 @@ import unicodedata
 # ---------------------------------------------------------------------------
 
 def file_content_hash(path: str) -> str:
-    """Return the MD5 hex-digest of a file's contents."""
-    h = hashlib.md5()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            h.update(chunk)
-    return h.hexdigest()
+    """Return the SHA-256 hex-digest of a file's contents."""
+    return compute_file_sha256(path)
 
 
 def compute_file_sha256(path: str) -> str:
@@ -32,6 +28,101 @@ def compute_file_sha256(path: str) -> str:
         for chunk in iter(lambda: f.read(65536), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def is_duplicate_filename_pattern(filename: str) -> bool:
+    """Return True if *filename* appears to be a duplicate copy based on common
+    naming patterns, e.g., 'file__2.pdf', 'file (1).pdf', 'file - Copy.pdf', 'file_copy.pdf'.
+    """
+    if not filename:
+        return False
+    base, _ = os.path.splitext(filename)
+    base_lower = base.lower().strip()
+    if re.search(r'(__\d{1,4}|\(\d{1,4}\)|[ _-]copy(?:\s*\(\d+\))?)$', base_lower):
+        return True
+    m = re.search(r'_(\d{1,2})$', base_lower)
+    if m and int(m.group(1)) > 0:
+        return True
+    return False
+
+
+def sort_key_for_source_dedup(filename: str):
+    """Sort key that prioritizes canonical/original filenames over duplicate copies:
+    1. Files without duplicate suffix come before duplicate-suffixed files.
+    2. Shorter filenames come before longer filenames.
+    3. Natural / alphabetical order as deterministic tiebreaker.
+    """
+    base, _ = os.path.splitext(filename)
+    has_dup = 1 if is_duplicate_filename_pattern(filename) else 0
+    return (has_dup, len(base), filename.lower())
+
+
+def deduplicate_local_files_by_sha256(
+    files: list[str],
+    folder_path: str,
+    log_func=None
+) -> tuple[list[str], dict[str, dict], dict[str, str]]:
+    """Scan *files* in *folder_path*, compute SHA-256 hashes, and deduplicate identical files.
+    If multiple files have identical SHA-256 hashes:
+      - The first one (prioritizing canonical names without duplicate suffixes) is kept.
+      - Later files with the same SHA-256 are identified as duplicates.
+
+    Returns:
+      (unique_files, duplicate_info, calculated_hashes)
+      - unique_files: list[str] of filenames to upload (first file only for each hash)
+      - duplicate_info: dict[str, dict] mapping dup_filename -> {
+            'first_file': str,
+            'sha256': str,
+            'path': str,
+            'size': int
+        }
+      - calculated_hashes: dict[str, str] mapping full_path -> sha256
+    """
+    if not files or not os.path.isdir(folder_path):
+        return files, {}, {}
+
+    # Sort files so canonical/original names are encountered first
+    sorted_files = sorted(files, key=sort_key_for_source_dedup)
+
+    unique_files: list[str] = []
+    duplicate_info: dict[str, dict] = {}
+    calculated_hashes: dict[str, str] = {}
+    seen_hashes: dict[str, str] = {}  # sha256 -> first_filename
+
+    for fn in sorted_files:
+        fp = os.path.join(folder_path, fn)
+        if not os.path.isfile(fp):
+            unique_files.append(fn)
+            continue
+
+        try:
+            h = compute_file_sha256(fp)
+            calculated_hashes[fp] = h
+        except Exception as e:
+            if log_func:
+                log_func('debug', f"Could not compute SHA-256 for '{fn}': {e}")
+            unique_files.append(fn)
+            continue
+
+        if h in seen_hashes:
+            first_fn = seen_hashes[h]
+            try:
+                f_size = os.path.getsize(fp)
+            except OSError:
+                f_size = 0
+            duplicate_info[fn] = {
+                'first_file': first_fn,
+                'sha256': h,
+                'path': fp,
+                'size': f_size,
+            }
+            if log_func:
+                log_func('info', f"[LOCAL CONTENT DUPLICATE] '{fn}' has identical SHA-256 ({h[:10]}...) to earlier file '{first_fn}' — keeping first file only.")
+        else:
+            seen_hashes[h] = fn
+            unique_files.append(fn)
+
+    return unique_files, duplicate_info, calculated_hashes
 
 
 

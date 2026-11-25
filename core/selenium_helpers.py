@@ -229,7 +229,7 @@ def force_download_via_fetch(
 
         if os.path.exists(out_path):
             existing_hash = file_content_hash(out_path)
-            new_hash = hashlib.md5(file_bytes).hexdigest()
+            new_hash = hashlib.sha256(file_bytes).hexdigest()
             if existing_hash == new_hash:
                 _log('info', f"Identical file already on disk, skipping: {out_path}")
                 return True
@@ -901,19 +901,21 @@ def open_dropdown_menu(
     'jquery-dropdown-hover.js' plugin that opens the dropdown on mouseover.
     If a caller unconditionally hovers *then* clicks the toggle, the click
     lands on an already-open menu and Bootstrap's toggle behavior CLOSES it
-    again -- silently, with no exception, leaving every subsequent xpath or
-    text search unable to find any menu item (this was the actual root cause
-    of 'Files & Documents navigation failed' errors: the button reported a
-    successful click, but 'aria-expanded' was 'false' the entire time).
+    again -- silently, with no exception.
 
     This helper hovers, checks whether the menu is now expanded, and only
-    clicks if it still isn't -- then verifies the expanded state before
-    returning, retrying once more if needed.
+    clicks if it still isn't. If expansion cannot be confirmed via DOM attributes/classes,
+    it clicks once and allows caller strategies to proceed rather than raising a fatal exception.
     """
     _log = log_func or (lambda l, m: logger.debug(m))
     active_wait = WebDriverWait(driver, timeout_override, poll_frequency=0.2) \
         if timeout_override else wait
-    toggle_el = active_wait.until(EC.element_to_be_clickable((By.XPATH, toggle_xpath)))
+    try:
+        toggle_el = active_wait.until(EC.element_to_be_clickable((By.XPATH, toggle_xpath)))
+    except Exception as e:
+        _log('warning', f"{description}: could not locate clickable toggle ({toggle_xpath}): {e}")
+        raise
+
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", toggle_el)
     except Exception:
@@ -923,10 +925,42 @@ def open_dropdown_menu(
         try:
             if (toggle_el.get_attribute("aria-expanded") or "").lower() == "true":
                 return True
-            return bool(driver.execute_script(
-                "var el = arguments[0]; var sib = el.nextElementSibling; "
-                "return !!(sib && sib.classList && sib.classList.contains('show'));",
-                toggle_el))
+            # Check Bootstrap 3 (.open), Bootstrap 4/5 (.show), visible child menus, or visible menu links
+            res = driver.execute_script("""
+                var el = arguments[0];
+                if (!el) return false;
+                if ((el.getAttribute("aria-expanded") || "").toLowerCase() === "true") return true;
+
+                // Check parent or closest container
+                var p = el.parentElement;
+                while (p && p !== document.body) {
+                    if (p.classList && (p.classList.contains("open") || p.classList.contains("show") || p.classList.contains("active"))) return true;
+                    var dm = p.querySelector(".dropdown-menu, ul[role='menu']");
+                    if (dm) {
+                        if (dm.classList && (dm.classList.contains("open") || dm.classList.contains("show"))) return true;
+                        var style = window.getComputedStyle(dm);
+                        if (style && style.display !== "none" && style.visibility !== "hidden" && (dm.offsetHeight > 0 || dm.offsetWidth > 0)) return true;
+                    }
+                    if (p.classList && (p.classList.contains("dropdown") || p.classList.contains("btn-group"))) break;
+                    p = p.parentElement;
+                }
+
+                // Check sibling
+                var sib = el.nextElementSibling;
+                if (sib) {
+                    if (sib.classList && (sib.classList.contains("show") || sib.classList.contains("open"))) return true;
+                    var sibStyle = window.getComputedStyle(sib);
+                    if (sibStyle && sibStyle.display !== "none" && sibStyle.visibility !== "hidden" && (sib.offsetHeight > 0 || sib.offsetWidth > 0)) return true;
+                }
+
+                // Check if any Files & Documents links are now visible
+                var fileLinks = document.querySelectorAll("a[href*='files_and_documents'], a[href*='files_documents'], a[href*='filesanddocuments']");
+                for (var i = 0; i < fileLinks.length; i++) {
+                    if (fileLinks[i].offsetHeight > 0 || fileLinks[i].offsetWidth > 0) return true;
+                }
+                return false;
+            """, toggle_el)
+            return bool(res)
         except Exception:
             return False
 
@@ -941,21 +975,27 @@ def open_dropdown_menu(
                        f"-- skipping click so it isn't immediately toggled shut.")
         return toggle_el
 
-    for click_attempt in range(2):
+    # Click once if not expanded via hover
+    try:
+        toggle_el.click()
+    except Exception:
         try:
-            toggle_el.click()
-        except Exception:
             driver.execute_script("arguments[0].click();", toggle_el)
-        _log('debug', f"Clicked: {description}")
+        except Exception as click_err:
+            _log('debug', f"{description}: click attempt failed: {click_err}")
+    _log('debug', f"Clicked: {description}")
 
-        end_time = time.time() + 3
-        while time.time() < end_time:
-            if _is_expanded():
-                return toggle_el
-            time.sleep(0.15)
-        _log('debug', f"{description}: not expanded after click attempt {click_attempt + 1}; retrying.")
+    end_time = time.time() + 2.0
+    while time.time() < end_time:
+        if _is_expanded():
+            return toggle_el
+        time.sleep(0.15)
 
-    raise Exception(f"'{description}' did not expand after hover+click.")
+    # Even if DOM heuristics cannot confirm expanded state (custom CSS/DOM),
+    # do NOT click a second time (which would close an already open menu!)
+    # and do NOT raise an exception (which aborts all strategies).
+    _log('debug', f"{description}: menu expansion state could not be verified via DOM heuristics; proceeding to target lookup.")
+    return toggle_el
 
 
 def click_outside_field(driver) -> None:
@@ -2327,8 +2367,8 @@ def safe_select_dropdown(
     raise Exception(f"Failed to select '{value}' from '{description}': {last_exception}")
 
 
-def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_func=None) -> bool:
-    """Locate and delete a FILE by *file_name* from the current PCR folder table listing.
+def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, download_href: str | None = None, log_func=None) -> bool:
+    """Locate and delete a FILE by *file_name* (and optional *download_href*) from the current PCR folder table listing.
     CRITICAL: NEVER deletes a folder under any circumstance.
     """
     import os as _os
@@ -2359,7 +2399,8 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
 
     fn_sanitized = sanitize_upload_filename(file_name).strip().lower()
     fn_base = _os.path.splitext(fn_lower)[0]
-    name_variants = {fn_lower, fn_sanitized, fn_lower.replace(' ', '_'), fn_lower.replace('_', ' ')}
+    exact_names = {fn_lower, fn_sanitized, fn_lower.replace(' ', '_'), fn_lower.replace('_', ' ')}
+    name_variants = set(exact_names)
     if fn_base and len(fn_base) >= 4:
         name_variants.add(fn_base)
 
@@ -2367,29 +2408,69 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
 
     # Step 1: Find target row (robust multi-attribute search across all rows)
     try:
-        for rxp in row_xpaths:
-            rows = driver.find_elements(By.XPATH, rxp)
-            for r in rows:
-                r_text = (r.get_attribute("textContent") or "").strip().lower()
-                if any(pf in r_text for pf in protected_folders):
-                    continue
-                # Direct match on row text
-                if any(v in r_text for v in name_variants):
-                    target_row = r
-                    break
-                # Check anchors/links in row
-                anchors = r.find_elements(By.XPATH, ".//a")
-                for a in anchors:
-                    a_text = (a.text or a.get_attribute("textContent") or "").strip().lower()
-                    a_href = (a.get_attribute("href") or "").lower()
-                    a_title = (a.get_attribute("title") or "").lower()
-                    if any(v in a_text or v in a_href or v in a_title for v in name_variants):
-                        target_row = r
+        # Phase 1A: Direct href match if download_href is supplied
+        if download_href:
+            dl_clean = download_href.strip().lower()
+            for rxp in row_xpaths:
+                rows = driver.find_elements(By.XPATH, rxp)
+                for r in rows:
+                    r_text = (r.get_attribute("textContent") or "").strip().lower()
+                    if any(pf in r_text for pf in protected_folders):
+                        continue
+                    for a in r.find_elements(By.XPATH, ".//a[@href]"):
+                        ah = (a.get_attribute("href") or "").lower()
+                        if dl_clean and (dl_clean in ah or ah in dl_clean):
+                            target_row = r
+                            break
+                    if target_row:
                         break
                 if target_row:
                     break
-            if target_row:
-                break
+
+        # Phase 1B: Exact filename match on anchor text, link title, or cell text
+        if not target_row:
+            for rxp in row_xpaths:
+                rows = driver.find_elements(By.XPATH, rxp)
+                for r in rows:
+                    r_text = (r.get_attribute("textContent") or "").strip().lower()
+                    if any(pf in r_text for pf in protected_folders):
+                        continue
+                    for a in r.find_elements(By.XPATH, ".//a | .//span | .//td"):
+                        txt = (a.text or a.get_attribute("textContent") or "").strip().lower()
+                        title = (a.get_attribute("title") or a.get_attribute("data-name") or "").strip().lower()
+                        if txt in exact_names or title in exact_names:
+                            target_row = r
+                            break
+                    if target_row:
+                        break
+                if target_row:
+                    break
+
+        # Phase 1C: Substring/variants fallback match
+        if not target_row:
+            for rxp in row_xpaths:
+                rows = driver.find_elements(By.XPATH, rxp)
+                for r in rows:
+                    r_text = (r.get_attribute("textContent") or "").strip().lower()
+                    if any(pf in r_text for pf in protected_folders):
+                        continue
+                    # Direct match on row text
+                    if any(v in r_text for v in name_variants):
+                        target_row = r
+                        break
+                    # Check anchors/links in row
+                    anchors = r.find_elements(By.XPATH, ".//a")
+                    for a in anchors:
+                        a_text = (a.text or a.get_attribute("textContent") or "").strip().lower()
+                        a_href = (a.get_attribute("href") or "").lower()
+                        a_title = (a.get_attribute("title") or "").lower()
+                        if any(v in a_text or v in a_href or v in a_title for v in name_variants):
+                            target_row = r
+                            break
+                    if target_row:
+                        break
+                if target_row:
+                    break
     except Exception as e:
         log('warning', f"Error scanning rows for file '{file_name}': {e}")
 
@@ -2483,3 +2564,118 @@ def delete_portal_file_by_name(driver, wait, file_name: str, config: dict, log_f
     except Exception as e:
         log('error', f"Exception while deleting file '{file_name}': {e}")
         return False
+
+
+def remove_destination_duplicate_files_by_sha256(
+    driver,
+    wait,
+    config: dict,
+    current_portal_files: list[dict],
+    portal_session=None,
+    portal_file_hashes: dict | None = None,
+    preferred_names: set[str] | list[str] | None = None,
+    student_id: str = "",
+    category_name: str = "",
+    batch_logs: list | None = None,
+    log_func=None
+) -> list[dict]:
+    """Inspect *current_portal_files* on the destination page for files with different names
+    but identical SHA-256 hashes.
+    If duplicate files exist:
+      - The first one is kept (prioritizing filenames matching *preferred_names* and canonical
+        names without duplicate suffixes like __2, (1), etc.).
+      - All later files with the same SHA-256 are deleted from the destination page.
+
+    Returns the updated *current_portal_files* list.
+    """
+    import datetime as _dt
+    from core.utils import is_duplicate_filename_pattern, sanitize_upload_filename
+
+    log = log_func or (lambda l, m: None)
+    if not current_portal_files or len(current_portal_files) < 2:
+        return current_portal_files
+
+    if portal_file_hashes is None:
+        portal_file_hashes = {}
+
+    # 1. Ensure SHA-256 hashes are computed for all files on destination page with href
+    missing_hashes = [
+        cf for cf in current_portal_files
+        if cf.get('href') and cf['href'] not in portal_file_hashes
+        and not any(bad in cf['href'].lower() for bad in ['admin_download_required_and_audit_files', 'downloadfilestype='])
+    ]
+    if missing_hashes:
+        try:
+            log('info', f"[DESTINATION DEDUP] Computing SHA-256 checksums for {len(missing_hashes)} file(s) on destination page...")
+            batch_hashes = compute_portal_folder_sha256_batch(
+                driver, missing_hashes, session=portal_session, max_workers=6, log_func=log
+            )
+            portal_file_hashes.update(batch_hashes)
+        except Exception as e:
+            log('debug', f"Batch SHA-256 notice for destination deduplication: {e}")
+
+    # 2. Group portal files by SHA-256 hash
+    hash_groups: dict[str, list[dict]] = {}
+    for cf in current_portal_files:
+        href = cf.get('href', '').strip()
+        h = portal_file_hashes.get(href)
+        if h:
+            hash_groups.setdefault(h, []).append(cf)
+
+    # 3. For any hash with multiple files, identify and remove later duplicates
+    pref_set = set()
+    if preferred_names:
+        for p in preferred_names:
+            pref_set.add(p.strip().lower())
+            pref_set.add(sanitize_upload_filename(p).strip().lower())
+
+    for h, group in hash_groups.items():
+        if len(group) <= 1:
+            continue
+
+        def _dup_rank(cf):
+            name = cf.get('name', '')
+            name_clean = name.strip().lower()
+            name_sanitized = sanitize_upload_filename(name).strip().lower()
+            # Rank 0: Matches preferred local file
+            is_pref = 0 if (name_clean in pref_set or name_sanitized in pref_set) else 1
+            # Rank 1: Canonical name without duplicate patterns (__2, (1), etc.)
+            has_dup = 1 if is_duplicate_filename_pattern(name) else 0
+            # Rank 2: Length of name (original is usually shorter than duplicate-suffixed)
+            name_len = len(name)
+            # Rank 3: Index in listing
+            try:
+                idx = current_portal_files.index(cf)
+            except ValueError:
+                idx = 9999
+            return (is_pref, has_dup, name_len, idx)
+
+        sorted_group = sorted(group, key=_dup_rank)
+        first_file = sorted_group[0]
+        later_files = sorted_group[1:]
+
+        log('info', f"[DESTINATION DEDUP] Detected {len(group)} files on destination page with identical SHA-256 ({h[:10]}...): keeping '{first_file.get('name')}', removing {len(later_files)} later duplicate(s).")
+
+        for later_cf in later_files:
+            later_name = later_cf.get('name', '')
+            later_href = later_cf.get('href', '')
+            log('warning', f"[DESTINATION DUPLICATE] Removing later duplicate file '{later_name}' (identical SHA-256 {h[:10]}... to '{first_file.get('name')}')...")
+            deleted = delete_portal_file_by_name(driver, wait, later_name, config, download_href=later_href, log_func=log)
+            if deleted:
+                log('info', f"[REMOVED DESTINATION DUPLICATE] Successfully deleted '{later_name}' from destination page.")
+                if batch_logs is not None:
+                    batch_logs.append({
+                        'studentId':     student_id,
+                        'category':      category_name,
+                        'fileName':      later_name,
+                        'uploadedAs':    '-',
+                        'action':        'deleted_duplicate_hash',
+                        'actionComment': f"Removed later duplicate file from destination page (identical SHA-256 {h[:10]}... to '{first_file.get('name')}')",
+                        'validation':    'deleted',
+                        'timestamp':     _dt.datetime.now().isoformat(timespec='seconds'),
+                    })
+                current_portal_files = [f for f in current_portal_files if f.get('name') != later_name and f.get('href') != later_href]
+                if later_href:
+                    portal_file_hashes.pop(later_href, None)
+
+    return current_portal_files

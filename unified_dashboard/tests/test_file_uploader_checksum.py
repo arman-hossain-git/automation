@@ -154,6 +154,88 @@ class TestFileUploaderChecksum(unittest.TestCase):
         self.assertIn("133 KB", file_info.get('size_text', ''))
         self.assertIn("contract_20222023_346641614.pdf", snapshot['by_name'])
 
+    def test_deduplicate_local_files_by_sha256_preserves_first_and_identifies_later(self):
+        from core.utils import deduplicate_local_files_by_sha256
+
+        # Write test files: 2 files with identical hash, 1 unique
+        f1 = os.path.join(self.tmp_dir.name, "Contract_20212022_346641029.pdf")
+        f2 = os.path.join(self.tmp_dir.name, "Contract_20212022_346641029__2.pdf")
+        f3 = os.path.join(self.tmp_dir.name, "Contract_20212022_346641029__3.pdf")
+
+        content_identical = b"Contract 2021-2022 identical body content for student 346641029"
+        content_different = b"Contract 2021-2022 DIFFERENT amended content"
+
+        with open(f1, "wb") as f:
+            f.write(content_identical)
+        with open(f2, "wb") as f:
+            f.write(content_identical)
+        with open(f3, "wb") as f:
+            f.write(content_different)
+
+        files = [
+            "Contract_20212022_346641029__2.pdf",
+            "Contract_20212022_346641029.pdf",
+            "Contract_20212022_346641029__3.pdf",
+        ]
+
+        unique_files, duplicate_info, calculated_hashes = deduplicate_local_files_by_sha256(
+            files, self.tmp_dir.name
+        )
+
+        # The canonical first file must be kept in unique_files
+        self.assertIn("Contract_20212022_346641029.pdf", unique_files)
+        # The unique amended file must be kept in unique_files
+        self.assertIn("Contract_20212022_346641029__3.pdf", unique_files)
+        # The duplicate with __2 suffix must be identified as duplicate
+        self.assertNotIn("Contract_20212022_346641029__2.pdf", unique_files)
+        self.assertIn("Contract_20212022_346641029__2.pdf", duplicate_info)
+        self.assertEqual(
+            duplicate_info["Contract_20212022_346641029__2.pdf"]["first_file"],
+            "Contract_20212022_346641029.pdf"
+        )
+
+    @patch("core.selenium_helpers.delete_portal_file_by_name")
+    def test_remove_destination_duplicate_files_by_sha256(self, mock_delete):
+        from core.selenium_helpers import remove_destination_duplicate_files_by_sha256
+
+        mock_delete.return_value = True
+        driver = MagicMock()
+        wait = MagicMock()
+
+        portal_files = [
+            {'name': 'Contract_20212022_346641029.pdf', 'href': 'https://portal/doc/1'},
+            {'name': 'Contract_20212022_346641029__2.pdf', 'href': 'https://portal/doc/2'},
+            {'name': 'Other_Report.pdf', 'href': 'https://portal/doc/3'},
+        ]
+        portal_hashes = {
+            'https://portal/doc/1': 'sha_hash_abc_123',
+            'https://portal/doc/2': 'sha_hash_abc_123',  # Identical hash!
+            'https://portal/doc/3': 'sha_hash_xyz_789',
+        }
+
+        updated = remove_destination_duplicate_files_by_sha256(
+            driver=driver,
+            wait=wait,
+            config={},
+            current_portal_files=portal_files,
+            portal_file_hashes=portal_hashes,
+            preferred_names={'Contract_20212022_346641029.pdf'},
+            student_id="346641029",
+            category_name="Finance"
+        )
+
+        # Deletion must be invoked for the later duplicate, NOT the first file
+        mock_delete.assert_called_once()
+        call_args = mock_delete.call_args[0]
+        deleted_name = call_args[2]
+        self.assertEqual(deleted_name, 'Contract_20212022_346641029__2.pdf')
+
+        # Remaining files must retain the first file and the distinct file
+        remaining_names = [f['name'] for f in updated]
+        self.assertIn('Contract_20212022_346641029.pdf', remaining_names)
+        self.assertIn('Other_Report.pdf', remaining_names)
+        self.assertNotIn('Contract_20212022_346641029__2.pdf', remaining_names)
+
 
 if __name__ == "__main__":
     unittest.main()

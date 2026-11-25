@@ -201,6 +201,7 @@ class BaseToolFrame(tk.Frame):
         # Queue tracking
         self.queue_tasks = []
         self.paused_queue_idx = None
+        self._current_queue_task_idx = None  # tracks the index of the currently executing task
 
         # Metrics for Live KPIs
         self.total_students = 0
@@ -254,6 +255,13 @@ class BaseToolFrame(tk.Frame):
             fg=TEXT_ACCENT, bg=BG_CARD, anchor="w"
         )
         self.lbl_status.pack(side="left")
+
+        # Queue progress badge — always visible in the header bar
+        self.lbl_queue_progress = tk.Label(
+            status_row, text="", font=FONT_BODY_BOLD,
+            fg="#a78bfa", bg=BG_CARD, anchor="e", padx=12
+        )
+        self.lbl_queue_progress.pack(side="right")
 
         self.progress_bar = ttk.Progressbar(status_row, orient="horizontal", mode="determinate")
         self.progress_bar.pack(side="right", fill="x", expand=True, padx=(20, 0))
@@ -489,12 +497,13 @@ class BaseToolFrame(tk.Frame):
             return val_lbl
 
         # Left Column: Workload & Volume Metrics
-        self.kpi_students = add_kpi_row(left_col, 0, "Students / Items Traversed:")
-        self.kpi_files_done = add_kpi_row(left_col, 1, "Files / Tasks Processed:")
-        self.kpi_data_volume = add_kpi_row(left_col, 2, "Data Volume Processed:")
-        self.kpi_current_student = add_kpi_row(left_col, 3, "Current Student ID:")
-        self.kpi_current_category = add_kpi_row(left_col, 4, "Current Stage / Folder:")
-        self.kpi_current_file = add_kpi_row(left_col, 5, "In-Flight File & Size:")
+        self.kpi_queue_progress = add_kpi_row(left_col, 0, "Queue Progress:")
+        self.kpi_students = add_kpi_row(left_col, 1, "Students / Items Traversed:")
+        self.kpi_files_done = add_kpi_row(left_col, 2, "Files / Tasks Processed:")
+        self.kpi_data_volume = add_kpi_row(left_col, 3, "Data Volume Processed:")
+        self.kpi_current_student = add_kpi_row(left_col, 4, "Current Student ID:")
+        self.kpi_current_category = add_kpi_row(left_col, 5, "Current Stage / Folder:")
+        self.kpi_current_file = add_kpi_row(left_col, 6, "In-Flight File & Size:")
 
         # Right Column: Performance & Time KPIs
         self.kpi_start_time = add_kpi_row(right_col, 0, "Automation Start:")
@@ -558,6 +567,19 @@ class BaseToolFrame(tk.Frame):
 
     def _refresh_kpi_display(self):
         try:
+            # 0. Queue Progress (shown at the top of the KPI panel)
+            if hasattr(self, '_current_queue_task_idx') and self._current_queue_task_idx is not None:
+                total_q = len(self.queue_tasks)
+                done_q = sum(1 for t in self.queue_tasks if t.status in ("Completed", "Failed", "Aborted", "Discarded"))
+                pending_q = total_q - done_q - 1  # subtract the one currently running
+                pending_q = max(0, pending_q)
+                self.kpi_queue_progress.config(
+                    text=f"Task {self._current_queue_task_idx + 1} of {total_q}  "
+                         f"({done_q} done, {pending_q} remaining)"
+                )
+            else:
+                self.kpi_queue_progress.config(text="-")
+
             # 1. Students / Items
             if self.total_students > 0:
                 pct = (self.students_traversed / self.total_students) * 100
@@ -879,7 +901,17 @@ class BaseToolFrame(tk.Frame):
             self.lbl_queue_status.config(text="Queue is empty (Single-task run if started without queueing).")
         else:
             paused_str = f" | Paused at task {self.paused_queue_idx+1}" if self.paused_queue_idx is not None else ""
-            self.lbl_queue_status.config(text=f"Total Tasks: {count}{paused_str}")
+            done_count = sum(1 for t in self.queue_tasks if t.status in ("Completed", "Failed", "Aborted", "Discarded"))
+            pending_count = sum(1 for t in self.queue_tasks if t.status == "Pending")
+            running_count = sum(1 for t in self.queue_tasks if t.status == "In Progress")
+            parts = [f"Total: {count}"]
+            if running_count:
+                parts.append(f"Running: {running_count}")
+            if done_count:
+                parts.append(f"Done: {done_count}")
+            if pending_count:
+                parts.append(f"Pending: {pending_count}")
+            self.lbl_queue_status.config(text="  |  ".join(parts) + paused_str)
 
     # ------------------------------------------------------------------
     # Sequential Execution Engine
@@ -917,9 +949,47 @@ class BaseToolFrame(tk.Frame):
                         break
 
                     task.status = "In Progress"
+                    self._current_queue_task_idx = idx
                     self.after(0, self.refresh_queue_display)
                     self.update_status(f"Running Task {idx+1}/{len(self.queue_tasks)}: {task.label}")
                     self.log("info", f"[QUEUE] === Running Task {idx+1}/{len(self.queue_tasks)}: {task.label} ===")
+
+                    # ── Reset per-task KPIs & telemetry so the Live Activity tab
+                    #    always reflects the CURRENT task's metrics, not leftovers
+                    #    from the previous one.
+                    #    Non-UI state is reset here (background thread) immediately;
+                    #    UI widgets are updated via after(0) on the main thread.
+                    self.total_students = 0
+                    self.students_traversed = 0
+                    self.current_student_id = "-"
+                    self.current_category = "-"
+                    self.files_done = 0
+                    self.files_total = 0
+                    self.total_bytes = 0
+                    self.bytes_done = 0
+                    self.current_file_name = "-"
+                    self.current_file_size = 0
+                    self.speed_history.clear()
+                    self.rolling_speed_bps = 0.0
+
+                    def _reset_task_ui(task_idx=idx, total_q=len(self.queue_tasks)):
+                        # Reset telemetry graph for the new task
+                        if hasattr(self, 'telemetry_graph'):
+                            self.telemetry_graph.reset(total_bytes=0)
+                        # Update the queue progress badge in the status bar
+                        done_q = sum(
+                            1 for t in self.queue_tasks
+                            if t.status in ("Completed", "Failed", "Aborted", "Discarded")
+                        )
+                        pending_q = max(0, total_q - done_q - 1)
+                        badge_txt = (
+                            f"📋 Task {task_idx + 1}/{total_q}  "
+                            f"({done_q} done · {pending_q} left)"
+                            if total_q > 1 else ""
+                        )
+                        self.lbl_queue_progress.config(text=badge_txt)
+                        self._refresh_kpi_display()
+                    self.after(0, _reset_task_ui)
 
                     success = self.run_single_task(task)
 
@@ -936,6 +1006,20 @@ class BaseToolFrame(tk.Frame):
                         self.log("error", f"[QUEUE] Task {idx+1} failed.")
 
                     self.after(0, self.refresh_queue_display)
+
+                    # Update the badge to reflect that this task is now done
+                    def _update_badge_after_task(task_idx=idx, total_q=len(self.queue_tasks)):
+                        done_q = sum(
+                            1 for t in self.queue_tasks
+                            if t.status in ("Completed", "Failed", "Aborted", "Discarded")
+                        )
+                        pending_q = max(0, total_q - done_q)
+                        badge_txt = (
+                            f"📋 {done_q}/{total_q} tasks done  ({pending_q} remaining)"
+                            if total_q > 1 else ""
+                        )
+                        self.lbl_queue_progress.config(text=badge_txt)
+                    self.after(0, _update_badge_after_task)
 
                     # Inter-task verification prompt if more tasks remain
                     if idx < len(self.queue_tasks) - 1:
@@ -1008,6 +1092,23 @@ class BaseToolFrame(tk.Frame):
 
                     self.update_status("Queue Execution Finished ✓")
                     self.log("info", "[QUEUE] All queue execution workflows completed.")
+
+                # Clear task tracking state
+                self._current_queue_task_idx = None
+                def _clear_queue_badge():
+                    total_q = len(self.queue_tasks)
+                    if total_q > 1:
+                        done_q = sum(
+                            1 for t in self.queue_tasks
+                            if t.status in ("Completed", "Failed", "Aborted", "Discarded")
+                        )
+                        self.lbl_queue_progress.config(
+                            text=f"📋 {done_q}/{total_q} tasks done"
+                        )
+                    else:
+                        self.lbl_queue_progress.config(text="")
+                    self._refresh_kpi_display()
+                self.after(0, _clear_queue_badge)
 
             except Exception as e:
                 import traceback

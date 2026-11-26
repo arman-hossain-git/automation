@@ -3,10 +3,11 @@ ui_qt/views/data_harmonizer_view.py
 ===================================
 Adaptive Dataset Harmonizer View for the PySide6 Unified Dashboard.
 
-Allows users to upload one or multiple raw datasets (CSV, Excel, JSON, SQLite)
-and a sample dataset (or multiple), automatically aligns and transforms the raw
-data to match the sample format using adaptive learning, and lets the user
-interactively review, verify, and export the harmonized dataset.
+Organized into a clean, intuitive multi-step tabbed workflow:
+  1. Datasets & Sources: Upload raw datasets and gold standard sample schemas.
+  2. Schema Mapping & Rules: Interactive schema alignment, matching matrix, and rules.
+  3. Preview & Export: Real-time harmonized output preview and export to CSV/Excel/JSON/DB.
+  4. Adaptive Intelligence: Inspection and management of persistent learned patterns.
 """
 
 import os
@@ -16,10 +17,11 @@ import pandas as pd
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QFileDialog, QMessageBox, QTabWidget, QCheckBox, QProgressBar,
-    QSplitter, QScrollArea, QSizePolicy, QDialog, QListWidget, QListWidgetItem, QDialogButtonBox
+    QSplitter, QScrollArea, QSizePolicy, QDialog, QListWidget, QListWidgetItem, QDialogButtonBox,
+    QAbstractItemView
 )
 from PySide6.QtGui import QFont, QColor
 
@@ -35,6 +37,8 @@ from core.data_harmonizer.profiler import DataProfiler, DatasetProfile, ColumnPr
 from core.data_harmonizer.combiner import MultiSourceCombiner
 from core.data_harmonizer.matcher import SchemaMatcher, ColumnMappingMatch
 from core.data_harmonizer.transformer import DataTransformer
+from core.data_harmonizer.adaptive_memory import harmonizer_memory
+from core.ollama_engine import ollama_engine
 
 
 class SheetSelectionDialog(QDialog):
@@ -43,7 +47,7 @@ class SheetSelectionDialog(QDialog):
     def __init__(self, filename: str, sheet_names: List[str], single_select: bool = False, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Select {'Tab' if single_select else 'Tabs'}: {os.path.basename(filename)}")
-        self.resize(400, 320)
+        self.resize(420, 340)
         self.setStyleSheet(f"""
             QDialog {{ background-color: {BG_CARD}; color: {TEXT_PRIMARY}; }}
             QLabel {{ color: {TEXT_PRIMARY}; background: transparent; }}
@@ -90,7 +94,7 @@ class SheetSelectionDialog(QDialog):
             item = QListWidgetItem(s)
             if not single_select:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Checked)
+                item.setCheckState(Qt.CheckState.Unchecked)
             self.list_widget.addItem(item)
 
         if single_select and self.list_widget.count() > 0:
@@ -98,10 +102,27 @@ class SheetSelectionDialog(QDialog):
 
         layout.addWidget(self.list_widget)
 
+        if not single_select:
+            sel_bar = QHBoxLayout()
+            sel_bar.setSpacing(8)
+            btn_select_all = QPushButton("Select All")
+            btn_select_all.clicked.connect(lambda: self._set_all_checked(True))
+            btn_deselect_all = QPushButton("Deselect All")
+            btn_deselect_all.clicked.connect(lambda: self._set_all_checked(False))
+            sel_bar.addWidget(btn_select_all)
+            sel_bar.addWidget(btn_deselect_all)
+            sel_bar.addStretch()
+            layout.addLayout(sel_bar)
+
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+
+    def _set_all_checked(self, checked: bool):
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(state)
 
     def get_selected_sheets(self) -> List[str]:
         selected = []
@@ -117,7 +138,7 @@ class SheetSelectionDialog(QDialog):
 
 
 class DataHarmonizerView(QWidget):
-    """PySide6 view for multi-source data reshaping, normalization, and adaptive harmonization."""
+    """PySide6 modern tabbed view for multi-source data reshaping, normalization, and adaptive harmonization."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -132,26 +153,26 @@ class DataHarmonizerView(QWidget):
         self._refresh_learning_stats()
 
     # ------------------------------------------------------------------
-    # UI Layout Construction
+    # UI Layout Construction (Tabbed Architecture)
     # ------------------------------------------------------------------
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 16)
-        root.setSpacing(14)
+        root.setContentsMargins(20, 16, 20, 16)
+        root.setSpacing(12)
 
         # ── 1. Header Banner ──────────────────────────────────────────
         hdr = QFrame()
         hdr.setStyleSheet(
             f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; "
-            f"border-radius: 8px; padding: 10px;"
+            f"border-radius: 8px; padding: 6px 14px;"
         )
         h_layout = QHBoxLayout(hdr)
         h_layout.setContentsMargins(12, 6, 12, 6)
 
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        lbl_title = QLabel("Adaptive Dataset Harmonizer")
+        lbl_title = QLabel("✨ Adaptive Dataset Harmonizer")
         lbl_title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
         lbl_sub = QLabel("Multi-source schema matching, relational combining, and self-learning format normalization")
         lbl_sub.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
@@ -184,37 +205,110 @@ class DataHarmonizerView(QWidget):
 
         root.addWidget(hdr)
 
-        # ── 2. Input Datasets & Sample Loader Grid ────────────────────
-        inputs_frame = QFrame()
-        inputs_frame.setStyleSheet(
-            f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; "
-            f"border-radius: 8px; padding: 8px;"
-        )
-        grid = QGridLayout(inputs_frame)
-        grid.setContentsMargins(12, 10, 12, 10)
-        grid.setSpacing(14)
+        # ── 2. Main Tabbed Container ───────────────────────────────────
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 1px solid {BORDER_SUBTLE};
+                background-color: {BG_BASE};
+                border-radius: 8px;
+            }}
+            QTabBar::tab {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_SECONDARY};
+                padding: 9px 18px;
+                margin-right: 4px;
+                border: 1px solid {BORDER_SUBTLE};
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                font-weight: 600;
+                font-size: 12px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {BG_BASE};
+                color: {TEXT_PRIMARY};
+                border-bottom: 3px solid {ACCENT_PRIMARY};
+                font-weight: 700;
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {BG_CARD};
+                color: {TEXT_PRIMARY};
+            }}
+        """)
 
-        # Left Column: Raw Input Datasets
-        raw_header = QLabel("1. Raw Source Dataset(s) or Database")
-        raw_header.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
-        grid.addWidget(raw_header, 0, 0)
+        # Tab 1: Datasets & Sources Setup
+        self.tab_sources = self._build_sources_tab()
+        self.main_tabs.addTab(self.tab_sources, "📁  1. Datasets & Sources")
 
-        raw_btn_box = QHBoxLayout()
+        # Tab 2: Schema Mapping Matrix & Rules
+        self.tab_mapping = self._build_mapping_tab()
+        self.main_tabs.addTab(self.tab_mapping, "🔗  2. Schema Mapping & Rules")
+
+        # Tab 3: Harmonized Preview & Export
+        self.tab_export = self._build_export_tab()
+        self.main_tabs.addTab(self.tab_export, "🚀  3. Preview & Export")
+
+        # Tab 4: Adaptive Learning Knowledge
+        self.tab_memory = self._build_memory_tab()
+        self.main_tabs.addTab(self.tab_memory, "🧠  4. Adaptive Intelligence")
+
+        root.addWidget(self.main_tabs, stretch=1)
+
+    # ------------------------------------------------------------------
+    # TAB 1: Datasets & Sources Setup
+    # ------------------------------------------------------------------
+
+    def _build_sources_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(14)
+
+        # 2-Column Split: Raw Sources (Left) vs Sample Target (Right)
+        cols_layout = QHBoxLayout()
+        cols_layout.setSpacing(14)
+
+        # ── Card Left: Raw Source Datasets ──
+        raw_card = QFrame()
+        raw_card.setStyleSheet(f"""
+            QFrame#rawCard {{
+                background-color: {BG_CARD};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        raw_card.setObjectName("rawCard")
+        r_layout = QVBoxLayout(raw_card)
+        r_layout.setContentsMargins(14, 12, 14, 12)
+        r_layout.setSpacing(10)
+
+        r_title = QLabel("1. Raw Source Dataset(s) or Database")
+        r_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
+        r_layout.addWidget(r_title)
+
+        r_sub = QLabel("Select raw files to reshape into the target standard.")
+        r_sub.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
+        r_layout.addWidget(r_sub)
+
+        # Action Buttons
+        r_btn_row = QHBoxLayout()
         self.btn_add_raw = QPushButton("+ Add Raw Files (CSV, XLSX, JSON, DB)")
         self.btn_add_raw.setStyleSheet(f"""
             QPushButton {{
                 background-color: {ACCENT_PRIMARY};
                 color: #FFFFFF;
                 border-radius: 6px;
-                padding: 8px 14px;
+                padding: 7px 14px;
                 font-weight: 600;
+                font-size: 12px;
             }}
             QPushButton:hover {{
                 background-color: {ACCENT_PRIMARY_HOVER};
             }}
         """)
         self.btn_add_raw.clicked.connect(self._browse_raw_files)
-        raw_btn_box.addWidget(self.btn_add_raw)
+        r_btn_row.addWidget(self.btn_add_raw)
 
         self.btn_clear_raw = QPushButton("Clear")
         self.btn_clear_raw.setStyleSheet(f"""
@@ -223,25 +317,45 @@ class DataHarmonizerView(QWidget):
                 color: {TEXT_MUTED};
                 border: 1px solid {BORDER_SUBTLE};
                 border-radius: 6px;
-                padding: 8px 12px;
+                padding: 7px 12px;
+                font-size: 12px;
             }}
             QPushButton:hover {{
                 color: {TEXT_PRIMARY};
             }}
         """)
         self.btn_clear_raw.clicked.connect(self._clear_raw_files)
-        raw_btn_box.addWidget(self.btn_clear_raw)
-        grid.addLayout(raw_btn_box, 1, 0)
+        r_btn_row.addWidget(self.btn_clear_raw)
+        r_btn_row.addStretch()
+        r_layout.addLayout(r_btn_row)
 
         self.lbl_raw_status = QLabel("No raw datasets loaded.")
         self.lbl_raw_status.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
-        grid.addWidget(self.lbl_raw_status, 2, 0)
+        r_layout.addWidget(self.lbl_raw_status)
 
-        # Combine Mode Selector
-        combine_box = QHBoxLayout()
+        # Summary Table for Loaded Raw Sources
+        self.tbl_raw_files_summary = QTableWidget(0, 4)
+        self.tbl_raw_files_summary.setHorizontalHeaderLabels(["Source Table / File", "Format", "Rows", "Cols"])
+        self.tbl_raw_files_summary.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tbl_raw_files_summary.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.tbl_raw_files_summary.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.tbl_raw_files_summary.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.tbl_raw_files_summary.verticalHeader().setVisible(False)
+        self.tbl_raw_files_summary.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_raw_files_summary.setStyleSheet(self._table_stylesheet())
+        r_layout.addWidget(self.tbl_raw_files_summary, stretch=1)
+
+        # Multi-Source Combine Box
+        combine_card = QFrame()
+        combine_card.setStyleSheet(f"background-color: {BG_CARD_ALT}; border: 1px solid {BORDER_SUBTLE}; border-radius: 6px; padding: 6px;")
+        comb_layout = QVBoxLayout(combine_card)
+        comb_layout.setContentsMargins(8, 6, 8, 6)
+        comb_layout.setSpacing(4)
+
+        comb_row = QHBoxLayout()
         lbl_mode = QLabel("Multi-Source Combine:")
-        lbl_mode.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY}; border: none;")
-        combine_box.addWidget(lbl_mode)
+        lbl_mode.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {TEXT_PRIMARY}; border: none;")
+        comb_row.addWidget(lbl_mode)
 
         self.combo_combine_mode = QComboBox()
         self.combo_combine_mode.addItems(["Auto-Detect (Smart)", "Smart Union (Stack Rows)", "Smart Join (Relational Merge)"])
@@ -255,16 +369,40 @@ class DataHarmonizerView(QWidget):
                 font-size: 11px;
             }}
         """)
-        combine_box.addWidget(self.combo_combine_mode)
-        combine_box.addStretch()
-        grid.addLayout(combine_box, 3, 0)
+        comb_row.addWidget(self.combo_combine_mode, stretch=1)
+        comb_layout.addLayout(comb_row)
 
-        # Right Column: Sample Dataset(s)
-        sample_header = QLabel("2. Sample Target Dataset (Gold Standard Schema)")
-        sample_header.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
-        grid.addWidget(sample_header, 0, 1)
+        lbl_comb_hint = QLabel("Auto-Detect selects Union for matching headers, or Join on common ID keys.")
+        lbl_comb_hint.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED}; border: none;")
+        comb_layout.addWidget(lbl_comb_hint)
 
-        sample_btn_box = QHBoxLayout()
+        r_layout.addWidget(combine_card)
+        cols_layout.addWidget(raw_card, stretch=1)
+
+        # ── Card Right: Sample Target Dataset ──
+        sample_card = QFrame()
+        sample_card.setStyleSheet(f"""
+            QFrame#sampleCard {{
+                background-color: {BG_CARD};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        sample_card.setObjectName("sampleCard")
+        s_layout = QVBoxLayout(sample_card)
+        s_layout.setContentsMargins(14, 12, 14, 12)
+        s_layout.setSpacing(10)
+
+        s_title = QLabel("2. Sample Target Dataset (Gold Standard Schema)")
+        s_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
+        s_layout.addWidget(s_title)
+
+        s_sub = QLabel("Defines the expected column names, types, order, and format.")
+        s_sub.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
+        s_layout.addWidget(s_sub)
+
+        # Action Buttons
+        s_btn_row = QHBoxLayout()
         self.btn_upload_sample = QPushButton("📂 Upload Sample Dataset")
         self.btn_upload_sample.setStyleSheet(f"""
             QPushButton {{
@@ -272,15 +410,17 @@ class DataHarmonizerView(QWidget):
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_SUBTLE};
                 border-radius: 6px;
-                padding: 8px 14px;
+                padding: 7px 14px;
                 font-weight: 600;
+                font-size: 12px;
             }}
             QPushButton:hover {{
                 border-color: {ACCENT_PRIMARY};
+                background-color: {BG_INPUT};
             }}
         """)
         self.btn_upload_sample.clicked.connect(self._browse_sample_file)
-        sample_btn_box.addWidget(self.btn_upload_sample)
+        s_btn_row.addWidget(self.btn_upload_sample)
 
         self.btn_clear_sample = QPushButton("Clear")
         self.btn_clear_sample.setStyleSheet(f"""
@@ -289,30 +429,68 @@ class DataHarmonizerView(QWidget):
                 color: {TEXT_MUTED};
                 border: 1px solid {BORDER_SUBTLE};
                 border-radius: 6px;
-                padding: 8px 12px;
+                padding: 7px 12px;
+                font-size: 12px;
             }}
             QPushButton:hover {{
                 color: {TEXT_PRIMARY};
             }}
         """)
         self.btn_clear_sample.clicked.connect(self._clear_sample_file)
-        sample_btn_box.addWidget(self.btn_clear_sample)
-        grid.addLayout(sample_btn_box, 1, 1)
+        s_btn_row.addWidget(self.btn_clear_sample)
+        s_btn_row.addStretch()
+        s_layout.addLayout(s_btn_row)
 
         self.lbl_sample_status = QLabel("No sample dataset loaded.")
         self.lbl_sample_status.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
-        grid.addWidget(self.lbl_sample_status, 2, 1)
+        s_layout.addWidget(self.lbl_sample_status)
 
-        # Trigger Button
-        self.btn_analyze = QPushButton("⚡ Align Schemas & Auto-Match Mappings")
+        # Summary Table for Target Columns
+        self.tbl_sample_columns_summary = QTableWidget(0, 3)
+        self.tbl_sample_columns_summary.setHorizontalHeaderLabels(["Target Column Name", "Inferred Type", "Format / Key"])
+        self.tbl_sample_columns_summary.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tbl_sample_columns_summary.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.tbl_sample_columns_summary.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.tbl_sample_columns_summary.verticalHeader().setVisible(False)
+        self.tbl_sample_columns_summary.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_sample_columns_summary.setStyleSheet(self._table_stylesheet())
+        s_layout.addWidget(self.tbl_sample_columns_summary, stretch=1)
+
+        cols_layout.addWidget(sample_card, stretch=1)
+        layout.addLayout(cols_layout, stretch=1)
+
+        # ── Bottom CTA Action Banner ──
+        banner = QFrame()
+        banner.setStyleSheet(f"""
+            background-color: {BG_CARD};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 8px;
+            padding: 10px 14px;
+        """)
+        b_layout = QHBoxLayout(banner)
+        b_layout.setContentsMargins(12, 6, 12, 6)
+
+        msg_box = QVBoxLayout()
+        msg_box.setSpacing(2)
+        lbl_step_note = QLabel("Step 1 Complete: When ready, auto-align schemas and proceed to Mapping Matrix")
+        lbl_step_note.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_PRIMARY}; border: none;")
+        lbl_step_desc = QLabel("Schema matching utilizes learned precedents, type semantics, composite detection, and AI heuristics.")
+        lbl_step_desc.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
+        msg_box.addWidget(lbl_step_note)
+        msg_box.addWidget(lbl_step_desc)
+        b_layout.addLayout(msg_box)
+
+        b_layout.addStretch()
+
+        self.btn_analyze = QPushButton("⚡ Align Schemas & Auto-Match Mappings ➜")
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.setStyleSheet(f"""
             QPushButton {{
                 background-color: {ACCENT_PURPLE};
                 color: #FFFFFF;
                 border-radius: 6px;
-                padding: 6px 14px;
-                font-size: 12px;
+                padding: 10px 20px;
+                font-size: 13px;
                 font-weight: 700;
             }}
             QPushButton:disabled {{
@@ -324,35 +502,61 @@ class DataHarmonizerView(QWidget):
             }}
         """)
         self.btn_analyze.clicked.connect(self._align_and_match)
-        grid.addWidget(self.btn_analyze, 3, 1)
+        b_layout.addWidget(self.btn_analyze)
 
-        root.addWidget(inputs_frame)
+        layout.addWidget(banner)
+        return tab
 
-        # ── 3. Main Splitter: Mapping Matrix & Live Data Preview ──────
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setHandleWidth(4)
+    # ------------------------------------------------------------------
+    # TAB 2: Schema Mapping Matrix & Rules
+    # ------------------------------------------------------------------
 
-        # Upper Area: Mapping Matrix Table
-        mapping_card = QFrame()
-        mapping_card.setStyleSheet(
-            f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; "
-            f"border-radius: 8px;"
-        )
-        map_layout = QVBoxLayout(mapping_card)
-        map_layout.setContentsMargins(12, 10, 12, 10)
-        map_layout.setSpacing(8)
+    def _build_mapping_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
-        map_title_box = QHBoxLayout()
+        # ── Top Toolbar: Status, Filters & Actions ──
+        tb = QFrame()
+        tb.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px; padding: 6px 12px;")
+        tb_layout = QHBoxLayout(tb)
+        tb_layout.setContentsMargins(10, 6, 10, 6)
+        tb_layout.setSpacing(12)
+
+        info_box = QVBoxLayout()
+        info_box.setSpacing(2)
         lbl_map_title = QLabel("Schema Harmonization & Transformation Matrix")
         lbl_map_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
-        map_title_box.addWidget(lbl_map_title)
-
         self.lbl_match_summary = QLabel("Upload both raw & sample datasets to preview mappings.")
         self.lbl_match_summary.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
-        map_title_box.addWidget(self.lbl_match_summary)
-        map_title_box.addStretch()
+        info_box.addWidget(lbl_map_title)
+        info_box.addWidget(self.lbl_match_summary)
+        tb_layout.addLayout(info_box)
 
-        self.btn_reapply_all = QPushButton("Recompute Previews")
+        tb_layout.addStretch()
+
+        # Filter Mappings Dropdown
+        lbl_filter = QLabel("Filter:")
+        lbl_filter.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY}; border: none;")
+        tb_layout.addWidget(lbl_filter)
+
+        self.combo_mapping_filter = QComboBox()
+        self.combo_mapping_filter.addItems(["All Columns", "Needs Review / Low Match", "Unmapped", "High Match"])
+        self.combo_mapping_filter.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 5px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }}
+        """)
+        self.combo_mapping_filter.currentTextChanged.connect(self._on_filter_mappings)
+        tb_layout.addWidget(self.combo_mapping_filter)
+
+        self.btn_reapply_all = QPushButton("🔄 Recompute Previews")
         self.btn_reapply_all.setVisible(False)
         self.btn_reapply_all.setStyleSheet(f"""
             QPushButton {{
@@ -360,7 +564,7 @@ class DataHarmonizerView(QWidget):
                 color: {TEXT_SECONDARY};
                 border: 1px solid {BORDER_SUBTLE};
                 border-radius: 5px;
-                padding: 4px 10px;
+                padding: 5px 12px;
                 font-size: 11px;
             }}
             QPushButton:hover {{
@@ -368,10 +572,28 @@ class DataHarmonizerView(QWidget):
             }}
         """)
         self.btn_reapply_all.clicked.connect(self._update_all_previews)
-        map_title_box.addWidget(self.btn_reapply_all)
+        tb_layout.addWidget(self.btn_reapply_all)
 
-        map_layout.addLayout(map_title_box)
+        self.btn_goto_export = QPushButton("Proceed to Preview & Export ➜")
+        self.btn_goto_export.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ACCENT_PRIMARY};
+                color: #FFFFFF;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {ACCENT_PRIMARY_HOVER};
+            }}
+        """)
+        self.btn_goto_export.clicked.connect(lambda: self.main_tabs.setCurrentIndex(2))
+        tb_layout.addWidget(self.btn_goto_export)
 
+        layout.addWidget(tb)
+
+        # ── Full Height Mapping Matrix Table ──
         self.tbl_mappings = QTableWidget(0, 6)
         self.tbl_mappings.setHorizontalHeaderLabels([
             "Target Column (Sample)", "Target Type", "Source Column",
@@ -384,36 +606,32 @@ class DataHarmonizerView(QWidget):
         self.tbl_mappings.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tbl_mappings.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         self.tbl_mappings.verticalHeader().setVisible(False)
-        self.tbl_mappings.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {BG_BASE};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER_SUBTLE};
-                border-radius: 6px;
-                gridline-color: {BORDER_MUTED};
-            }}
-            QHeaderView::section {{
-                background-color: {BG_CARD_ALT};
-                color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER_SUBTLE};
-                padding: 6px;
-                font-weight: 600;
-                font-size: 11px;
-            }}
-        """)
-        map_layout.addWidget(self.tbl_mappings)
-        splitter.addWidget(mapping_card)
+        self.tbl_mappings.setStyleSheet(self._table_stylesheet())
+        layout.addWidget(self.tbl_mappings, stretch=1)
 
-        # Lower Area: Live Tabbed Preview
-        preview_card = QFrame()
-        preview_card.setStyleSheet(
-            f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; "
-            f"border-radius: 8px;"
-        )
-        prev_layout = QVBoxLayout(preview_card)
-        prev_layout.setContentsMargins(12, 8, 12, 8)
-        prev_layout.setSpacing(6)
+        # Helpful Bottom Tip
+        tip_frame = QFrame()
+        tip_frame.setStyleSheet(f"background-color: {BG_CARD_ALT}; border: 1px solid {BORDER_SUBTLE}; border-radius: 6px; padding: 6px 12px;")
+        tip_layout = QHBoxLayout(tip_frame)
+        tip_layout.setContentsMargins(8, 4, 8, 4)
+        lbl_tip = QLabel("💡 Tip: Customize any source mapping or conversion rule above. Any modifications automatically update the live preview on Tab 3.")
+        lbl_tip.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; border: none;")
+        tip_layout.addWidget(lbl_tip)
+        layout.addWidget(tip_frame)
 
+        return tab
+
+    # ------------------------------------------------------------------
+    # TAB 3: Harmonized Preview & Export
+    # ------------------------------------------------------------------
+
+    def _build_export_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
+
+        # ── Sub-tabs for Previews ──
         self.tabs_preview = QTabWidget()
         self.tabs_preview.setStyleSheet(f"""
             QTabWidget::pane {{
@@ -439,49 +657,65 @@ class DataHarmonizerView(QWidget):
             }}
         """)
 
-        # Tab 1: Harmonized Target Preview
+        # Sub-tab 1: Harmonized Target Preview
         self.tbl_out_preview = QTableWidget(0, 0)
-        self.tbl_out_preview.setStyleSheet(self.tbl_mappings.styleSheet())
-        self.tabs_preview.addTab(self.tbl_out_preview, "✨ Harmonized Output (Sample Order & Format)")
+        self.tbl_out_preview.setStyleSheet(self._table_stylesheet())
+        self.tabs_preview.addTab(self.tbl_out_preview, "✨ Harmonized Output Preview (Sample Order & Format)")
 
-        # Tab 2: Combined Raw Input Preview
+        # Sub-tab 2: Combined Raw Input Preview
         self.tbl_raw_preview = QTableWidget(0, 0)
-        self.tbl_raw_preview.setStyleSheet(self.tbl_mappings.styleSheet())
+        self.tbl_raw_preview.setStyleSheet(self._table_stylesheet())
         self.tabs_preview.addTab(self.tbl_raw_preview, "📋 Raw / Combined Input Preview")
 
-        # Tab 3: Learned Insights
-        self.tab_insights = QWidget()
-        ins_layout = QVBoxLayout(self.tab_insights)
-        self.lbl_insights = QLabel("Learned patterns will appear here once verified.")
-        self.lbl_insights.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-        ins_layout.addWidget(self.lbl_insights)
-        self.tabs_preview.addTab(self.tab_insights, "🧠 Adaptive Harmonizer Knowledge")
+        layout.addWidget(self.tabs_preview, stretch=1)
 
-        prev_layout.addWidget(self.tabs_preview)
-        splitter.addWidget(preview_card)
-
-        splitter.setSizes([320, 240])
-        root.addWidget(splitter, stretch=1)
-
-        # ── 4. Bottom Action Bar ──────────────────────────────────────
-        footer = QFrame()
-        footer.setStyleSheet(
+        # ── Export & Adaptive Reinforcement Configuration Card ──
+        export_card = QFrame()
+        export_card.setStyleSheet(
             f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; "
-            f"border-radius: 8px; padding: 6px 12px;"
+            f"border-radius: 8px; padding: 8px 14px;"
         )
-        foot_layout = QHBoxLayout(footer)
-        foot_layout.setContentsMargins(12, 6, 12, 6)
+        exp_layout = QHBoxLayout(export_card)
+        exp_layout.setContentsMargins(14, 8, 14, 8)
+        exp_layout.setSpacing(16)
 
+        chk_col = QVBoxLayout()
+        chk_col.setSpacing(4)
         self.chk_learn = QCheckBox("Save & reinforce learned column associations for future runs")
         self.chk_learn.setChecked(True)
         self.chk_learn.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px; font-weight: 600;")
-        foot_layout.addWidget(self.chk_learn)
+        chk_col.addWidget(self.chk_learn)
 
-        foot_layout.addStretch()
+        self.chk_exclude_blank = QCheckBox("Exclude blank / unmapped fields from export")
+        self.chk_exclude_blank.setChecked(False)
+        self.chk_exclude_blank.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px; font-weight: 600;")
+        self.chk_exclude_blank.toggled.connect(self._update_all_previews)
+        chk_col.addWidget(self.chk_exclude_blank)
+
+        exp_layout.addLayout(chk_col)
+        exp_layout.addStretch()
+
+        # Back to mapping button
+        btn_back_to_map = QPushButton("⬅ Adjust Mappings")
+        btn_back_to_map.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_SECONDARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                color: {TEXT_PRIMARY};
+            }}
+        """)
+        btn_back_to_map.clicked.connect(lambda: self.main_tabs.setCurrentIndex(1))
+        exp_layout.addWidget(btn_back_to_map)
 
         lbl_export_fmt = QLabel("Export Format:")
         lbl_export_fmt.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-        foot_layout.addWidget(lbl_export_fmt)
+        exp_layout.addWidget(lbl_export_fmt)
 
         self.combo_export_fmt = QComboBox()
         self.combo_export_fmt.addItems(["CSV (.csv)", "Excel (.xlsx)", "JSON (.json)", "SQLite (.db)"])
@@ -491,11 +725,11 @@ class DataHarmonizerView(QWidget):
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_SUBTLE};
                 border-radius: 5px;
-                padding: 4px 10px;
+                padding: 6px 12px;
                 font-size: 12px;
             }}
         """)
-        foot_layout.addWidget(self.combo_export_fmt)
+        exp_layout.addWidget(self.combo_export_fmt)
 
         self.btn_export = QPushButton("🚀 Transform & Export Harmonized Data")
         self.btn_export.setEnabled(False)
@@ -504,7 +738,7 @@ class DataHarmonizerView(QWidget):
                 background-color: {ACCENT_SUCCESS};
                 color: #FFFFFF;
                 border-radius: 6px;
-                padding: 8px 18px;
+                padding: 9px 20px;
                 font-size: 12px;
                 font-weight: 700;
             }}
@@ -517,9 +751,106 @@ class DataHarmonizerView(QWidget):
             }}
         """)
         self.btn_export.clicked.connect(self._export_harmonized_data)
-        foot_layout.addWidget(self.btn_export)
+        exp_layout.addWidget(self.btn_export)
 
-        root.addWidget(footer)
+        layout.addWidget(export_card)
+        return tab
+
+    # ------------------------------------------------------------------
+    # TAB 4: Adaptive Learning Knowledge
+    # ------------------------------------------------------------------
+
+    def _build_memory_tab(self) -> QWidget:
+        self.tab_insights = QWidget()
+        layout = QVBoxLayout(self.tab_insights)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
+
+        # ── KPI Stats Cards Row ──
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(14)
+
+        self.lbl_stat_mappings = QLabel("0")
+        self.lbl_stat_fingerprints = QLabel("0")
+        self.lbl_stat_rules = QLabel("Active")
+
+        card_map = self._create_kpi_card("Learned Column Associations", self.lbl_stat_mappings, ACCENT_PURPLE)
+        card_fp = self._create_kpi_card("Recognized Dataset Fingerprints", self.lbl_stat_fingerprints, ACCENT_PRIMARY)
+        card_status = self._create_kpi_card("Learning Engine Status", self.lbl_stat_rules, ACCENT_SUCCESS)
+
+        kpi_row.addWidget(card_map)
+        kpi_row.addWidget(card_fp)
+        kpi_row.addWidget(card_status)
+        layout.addLayout(kpi_row)
+
+        # ── Learned Column Associations Memory Table ──
+        lbl_tbl_title = QLabel("Permanent Column Mappings & Conversion Precedents")
+        lbl_tbl_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {TEXT_PRIMARY};")
+        layout.addWidget(lbl_tbl_title)
+
+        self.tbl_learned_memory = QTableWidget(0, 4)
+        self.tbl_learned_memory.setHorizontalHeaderLabels([
+            "Raw Source Column Pattern", "Target Sample Column", "Saved Transformation Rule", "Confirmations"
+        ])
+        self.tbl_learned_memory.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tbl_learned_memory.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tbl_learned_memory.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.tbl_learned_memory.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.tbl_learned_memory.verticalHeader().setVisible(False)
+        self.tbl_learned_memory.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_learned_memory.setStyleSheet(self._table_stylesheet())
+        layout.addWidget(self.tbl_learned_memory, stretch=1)
+
+        # Explanatory card
+        desc_card = QFrame()
+        desc_card.setStyleSheet(f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px; padding: 12px;")
+        d_layout = QVBoxLayout(desc_card)
+        self.lbl_insights = QLabel()
+        self.lbl_insights.setWordWrap(True)
+        d_layout.addWidget(self.lbl_insights)
+        layout.addWidget(desc_card)
+
+        return self.tab_insights
+
+    def _create_kpi_card(self, title: str, value_lbl: QLabel, accent_color: str) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet(f"""
+            background-color: {BG_CARD};
+            border: 1px solid {BORDER_SUBTLE};
+            border-left: 4px solid {accent_color};
+            border-radius: 8px;
+            padding: 10px 14px;
+        """)
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(10, 8, 10, 8)
+        c_layout.setSpacing(2)
+
+        lbl_t = QLabel(title)
+        lbl_t.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY}; border: none;")
+        value_lbl.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
+
+        c_layout.addWidget(lbl_t)
+        c_layout.addWidget(value_lbl)
+        return card
+
+    def _table_stylesheet(self) -> str:
+        return f"""
+            QTableWidget {{
+                background-color: {BG_BASE};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 6px;
+                gridline-color: {BORDER_MUTED};
+            }}
+            QHeaderView::section {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_SECONDARY};
+                border: 1px solid {BORDER_SUBTLE};
+                padding: 6px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+        """
 
     # ------------------------------------------------------------------
     # Data Loading & Management
@@ -531,30 +862,40 @@ class DataHarmonizerView(QWidget):
             self,
             "Select Raw Datasets or Database",
             "",
-            "All Supported (*.csv *.xlsx *.xls *.json *.db *.sqlite *.sqlite3);;CSV (*.csv);;Excel (*.xlsx *.xls);;JSON (*.json);;SQLite (*.db *.sqlite)"
+            "All Supported (*.csv *.xlsx *.xls *.json *.db *.sqlite *.sqlite3 *.sql);;CSV (*.csv);;Excel (*.xlsx *.xls);;JSON (*.json);;SQLite (*.db *.sqlite);;SQL Dump (*.sql)"
         )
         if not files:
             return
 
         loaded_profiles = []
         for f in files:
-            sheets = DataProfiler.list_sheets_or_tables(f)
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                sheets = DataProfiler.list_sheets_or_tables(f)
+            finally:
+                QApplication.restoreOverrideCursor()
+
             if len(sheets) > 1:
                 dlg = SheetSelectionDialog(f, sheets, single_select=False, parent=self)
                 if dlg.exec() == QDialog.Accepted:
                     chosen = dlg.get_selected_sheets()
-                    for sheet in chosen:
+                    if chosen:
+                        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
                         try:
-                            prof = DataProfiler.profile_dataset(f, table_name=sheet)
-                            loaded_profiles.append(prof)
+                            loaded_profiles.extend(DataProfiler.profile_selected_sources(f, chosen))
                         except Exception as e:
-                            QMessageBox.warning(self, "Load Error", f"Could not load tab '{sheet}':\n{e}")
+                            QMessageBox.warning(self, "Load Error", f"Could not load selected tables:\n{e}")
+                        finally:
+                            QApplication.restoreOverrideCursor()
             else:
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
                 try:
                     prof = DataProfiler.profile_dataset(f)
                     loaded_profiles.append(prof)
                 except Exception as e:
                     QMessageBox.warning(self, "Load Error", f"Could not load {os.path.basename(f)}:\n{e}")
+                finally:
+                    QApplication.restoreOverrideCursor()
 
         if loaded_profiles:
             self.raw_profiles.extend(loaded_profiles)
@@ -569,12 +910,12 @@ class DataHarmonizerView(QWidget):
         self._check_ready()
 
     def _update_raw_status(self):
+        self.tbl_raw_files_summary.setRowCount(0)
         if not self.raw_profiles:
             self.lbl_raw_status.setText("No raw datasets loaded.")
             return
 
         total_rows = sum(p.row_count for p in self.raw_profiles)
-        total_cols = sum(p.column_count for p in self.raw_profiles)
         file_names = ", ".join(p.source_name for p in self.raw_profiles[:3])
         if len(self.raw_profiles) > 3:
             file_names += f" (+{len(self.raw_profiles)-3} more)"
@@ -583,19 +924,45 @@ class DataHarmonizerView(QWidget):
             f"✅ {len(self.raw_profiles)} dataset table(s) loaded ({file_names}) — Total {total_rows} rows"
         )
 
+        # Populate summary table
+        self.tbl_raw_files_summary.setRowCount(len(self.raw_profiles))
+        for r, prof in enumerate(self.raw_profiles):
+            it_name = QTableWidgetItem(prof.source_name)
+            it_name.setForeground(QColor(TEXT_PRIMARY))
+            self.tbl_raw_files_summary.setItem(r, 0, it_name)
+
+            ext = os.path.splitext(prof.source_name)[1].lstrip(".").upper()
+            if not ext:
+                ext = "TABULAR"
+            it_fmt = QTableWidgetItem(ext)
+            it_fmt.setForeground(QColor(TEXT_MUTED))
+            self.tbl_raw_files_summary.setItem(r, 1, it_fmt)
+
+            it_rows = QTableWidgetItem(str(prof.row_count))
+            it_rows.setForeground(QColor(TEXT_PRIMARY))
+            self.tbl_raw_files_summary.setItem(r, 2, it_rows)
+
+            it_cols = QTableWidgetItem(str(prof.column_count))
+            it_cols.setForeground(QColor(TEXT_PRIMARY))
+            self.tbl_raw_files_summary.setItem(r, 3, it_cols)
+
     def _browse_sample_file(self):
         """Allows selecting a target sample dataset, with tab selection for multi-sheet workbooks."""
         f, _ = QFileDialog.getOpenFileName(
             self,
             "Select Sample Target Dataset",
             "",
-            "All Supported (*.csv *.xlsx *.xls *.json *.db *.sqlite *.sqlite3);;CSV (*.csv);;Excel (*.xlsx *.xls);;JSON (*.json)"
+            "All Supported (*.csv *.xlsx *.xls *.json *.db *.sqlite *.sqlite3 *.sql);;CSV (*.csv);;Excel (*.xlsx *.xls);;JSON (*.json);;SQLite (*.db *.sqlite *.sqlite3);;SQL Dump (*.sql)"
         )
         if not f:
             return
 
         chosen_sheet = None
-        sheets = DataProfiler.list_sheets_or_tables(f)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            sheets = DataProfiler.list_sheets_or_tables(f)
+        finally:
+            QApplication.restoreOverrideCursor()
         if len(sheets) > 1:
             dlg = SheetSelectionDialog(f, sheets, single_select=True, parent=self)
             if dlg.exec() == QDialog.Accepted:
@@ -603,18 +970,46 @@ class DataHarmonizerView(QWidget):
             else:
                 return
 
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self.sample_profile = DataProfiler.profile_dataset(f, table_name=chosen_sheet)
             self.lbl_sample_status.setText(
                 f"✅ Sample: {self.sample_profile.source_name} ({self.sample_profile.column_count} cols, {self.sample_profile.row_count} sample rows)"
             )
+            # Populate sample columns summary table
+            self._update_sample_summary_table()
             self._check_ready()
         except Exception as e:
             QMessageBox.warning(self, "Sample Error", f"Could not profile sample dataset:\n{e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _update_sample_summary_table(self):
+        self.tbl_sample_columns_summary.setRowCount(0)
+        if not self.sample_profile:
+            return
+
+        cols = list(self.sample_profile.columns.items())
+        self.tbl_sample_columns_summary.setRowCount(len(cols))
+        for r, (col_name, cp) in enumerate(cols):
+            it_name = QTableWidgetItem(col_name)
+            it_name.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            it_name.setForeground(QColor(TEXT_PRIMARY))
+            self.tbl_sample_columns_summary.setItem(r, 0, it_name)
+
+            it_type = QTableWidgetItem(cp.inferred_type)
+            it_type.setForeground(QColor(ACCENT_PRIMARY))
+            self.tbl_sample_columns_summary.setItem(r, 1, it_type)
+
+            desc = cp.detected_format or ("Candidate Key" if cp.is_candidate_key else "-")
+            it_fmt = QTableWidgetItem(desc)
+            it_fmt.setForeground(QColor(TEXT_MUTED))
+            self.tbl_sample_columns_summary.setItem(r, 2, it_fmt)
 
     def _clear_sample_file(self):
         self.sample_profile = None
         self.lbl_sample_status.setText("No sample dataset loaded.")
+        self.tbl_sample_columns_summary.setRowCount(0)
         self._check_ready()
 
     def _check_ready(self):
@@ -669,6 +1064,9 @@ class DataHarmonizerView(QWidget):
                 f"Matched {len(self.current_matches)} target columns ({high_conf} high confidence). You can adjust any mapping below."
             )
 
+            # Smoothly switch to Tab 2 (Schema Mapping Matrix)
+            self.main_tabs.setCurrentIndex(1)
+
         except Exception as e:
             QMessageBox.critical(self, "Harmonization Error", f"Failed to match schemas:\n{e}")
 
@@ -683,7 +1081,6 @@ class DataHarmonizerView(QWidget):
             return
 
         all_source_cols = ["(Unmapped / Blank)"] + list(self.combined_profile.columns.keys())
-
         self.tbl_mappings.setRowCount(len(self.current_matches))
 
         for row, match in enumerate(self.current_matches):
@@ -743,18 +1140,40 @@ class DataHarmonizerView(QWidget):
             item_prev.setForeground(QColor(ACCENT_SUCCESS))
             self.tbl_mappings.setItem(row, 5, item_prev)
 
+        # Apply active filter
+        self._on_filter_mappings(self.combo_mapping_filter.currentText())
+
+    def _on_filter_mappings(self, filter_text: str):
+        """Hides or reveals rows based on the selected confidence/mapping category."""
+        if not self.current_matches:
+            return
+
+        for row, match in enumerate(self.current_matches):
+            show = True
+            if filter_text == "Needs Review / Low Match":
+                show = (0.0 < match.confidence < 0.85)
+            elif filter_text == "Unmapped":
+                show = (match.confidence == 0.0 or not match.source_column or match.transformation_rule == "unmapped")
+            elif filter_text == "High Match":
+                show = (match.confidence >= 0.85)
+            self.tbl_mappings.setRowHidden(row, not show)
+
     def _update_confidence_cell(self, row: int, confidence: float, reason: str):
-        pct = int(confidence * 100)
         badge_frame = QFrame()
         b_layout = QHBoxLayout(badge_frame)
         b_layout.setContentsMargins(4, 2, 4, 2)
 
-        if confidence >= 0.85:
-            badge = StatusBadge(f"{pct}% ({reason[:24]})", "success")
-        elif confidence >= 0.50:
-            badge = StatusBadge(f"{pct}% (Review)", "warning")
+        reason_lower = (reason or "").lower()
+        if "golden memory" in reason_lower or "learned memory" in reason_lower:
+            badge = StatusBadge("✓ Learned Precedent", "success")
+        elif "adaptive ai" in reason_lower or "ollama" in reason_lower:
+            badge = StatusBadge("✨ Smart AI Match", "success")
+        elif confidence >= 0.85:
+            badge = StatusBadge("✓ High Match", "success")
+        elif confidence >= 0.45:
+            badge = StatusBadge("⚡ Needs Review", "warning")
         elif confidence > 0.0:
-            badge = StatusBadge(f"{pct}% (Low)", "danger")
+            badge = StatusBadge("⚠ Low Match", "danger")
         else:
             badge = StatusBadge("Unmapped", "neutral")
 
@@ -776,15 +1195,13 @@ class DataHarmonizerView(QWidget):
             match.transformation_rule = "unmapped"
             match.tier_reason = "User unmapped"
         elif selected_text.startswith("Composite:"):
-            # Preserve composite rule
             pass
         else:
             match.source_column = selected_text
-            match.confidence = 1.0  # User explicitly chose it
+            match.confidence = 1.0
             match.tier_reason = "Manual user selection"
             match.is_user_overridden = True
 
-            # Re-infer rule if needed
             if self.combined_profile and self.sample_profile:
                 src_cp = self.combined_profile.columns.get(selected_text)
                 tgt_cp = self.sample_profile.columns.get(match.sample_column)
@@ -794,7 +1211,6 @@ class DataHarmonizerView(QWidget):
                     match.transformation_rule = rule
                     match.rule_params = params
 
-                    # Update rule combo
                     rule_combo = self.tbl_mappings.cellWidget(row, 4)
                     if rule_combo:
                         rule_combo.blockSignals(True)
@@ -824,7 +1240,6 @@ class DataHarmonizerView(QWidget):
             match.sample_transformed_preview = ""
         else:
             matcher = SchemaMatcher(learning_engine)
-            # Find sample raw value
             raw_val = ""
             if match.transformation_rule == "concat":
                 cols = match.rule_params.get("columns", [])
@@ -849,14 +1264,16 @@ class DataHarmonizerView(QWidget):
             return
 
         try:
-            # Transform head
             sample_head = self.combined_raw_df.head(10).copy()
-            preview_out = DataTransformer.transform(sample_head, self.current_matches, self.sample_profile.column_order)
+            preview_out = DataTransformer.transform(
+                sample_head,
+                self.current_matches,
+                self.sample_profile.column_order,
+                exclude_blank=self.chk_exclude_blank.isChecked(),
+            )
 
-            # Render in Harmonized Output Tab
             self._render_dataframe_to_table(preview_out, self.tbl_out_preview)
 
-            # Update row preview strings
             for r in range(len(self.current_matches)):
                 self._update_row_preview(r)
 
@@ -864,7 +1281,7 @@ class DataHarmonizerView(QWidget):
             print(f"Preview update error: {e}")
 
     def _render_raw_preview(self):
-        """Renders first 10 rows of combined raw input in Tab 2."""
+        """Renders first 10 rows of combined raw input in Sub-tab 2."""
         if self.combined_raw_df is None:
             return
         self._render_dataframe_to_table(self.combined_raw_df.head(10), self.tbl_raw_preview)
@@ -893,7 +1310,6 @@ class DataHarmonizerView(QWidget):
         if self.combined_raw_df is None or not self.current_matches or not self.sample_profile:
             return
 
-        # Pick destination
         fmt_choice = self.combo_export_fmt.currentText()
         ext_filter = "CSV (*.csv)"
         default_ext = ".csv"
@@ -921,7 +1337,8 @@ class DataHarmonizerView(QWidget):
             result_df = DataTransformer.transform(
                 self.combined_raw_df,
                 self.current_matches,
-                self.sample_profile.column_order
+                self.sample_profile.column_order,
+                exclude_blank=self.chk_exclude_blank.isChecked(),
             )
 
             # 2. Export to disk
@@ -946,7 +1363,6 @@ class DataHarmonizerView(QWidget):
         verified_list = []
         for match in self.current_matches:
             if match.source_column and match.transformation_rule != "unmapped":
-                # Record individual column association feedback
                 learning_engine.record_harmonizer_feedback(
                     source_col=match.source_column,
                     target_col=match.sample_column,
@@ -960,28 +1376,70 @@ class DataHarmonizerView(QWidget):
                     "rule": match.transformation_rule
                 })
 
-        # Record dataset fingerprint recognition
         src_fp = self.combined_profile.fingerprint if self.combined_profile else "unknown"
         sample_fp = self.sample_profile.fingerprint if self.sample_profile else "unknown"
         learning_engine.record_harmonizer_run(src_fp, sample_fp, verified_list, rows_processed=rows_processed)
 
+        if self.combined_profile and self.sample_profile:
+            harmonizer_memory.record_user_feedback(
+                self.combined_profile, self.sample_profile, self.current_matches
+            )
+
         self._refresh_learning_stats()
 
     def _refresh_learning_stats(self):
-        """Updates the Adaptive Harmonizer Knowledge tab."""
+        """Updates the Adaptive Harmonizer Knowledge tab and KPI cards."""
         stats = learning_engine.get_harmonizer_profile_stats()
         total_mappings = stats.get("total_learned_mappings", 0)
         fingerprints = stats.get("recognized_fingerprints", 0)
 
+        # Update KPI cards
+        if hasattr(self, "lbl_stat_mappings"):
+            self.lbl_stat_mappings.setText(str(total_mappings))
+        if hasattr(self, "lbl_stat_fingerprints"):
+            self.lbl_stat_fingerprints.setText(str(fingerprints))
+
+        # Populate memory associations table
+        if hasattr(self, "tbl_learned_memory"):
+            self.tbl_learned_memory.setRowCount(0)
+            profiles = stats.get("profiles", {})
+            assocs = profiles.get("column_associations", {})
+
+            rows = []
+            for src, targets in assocs.items():
+                for tgt, details in targets.items():
+                    rows.append((src, tgt, details.get("rule", "direct"), details.get("confirmed", 1)))
+
+            self.tbl_learned_memory.setRowCount(len(rows))
+            for idx, (src, tgt, rule, count) in enumerate(rows):
+                it_src = QTableWidgetItem(src)
+                it_src.setForeground(QColor(TEXT_PRIMARY))
+                self.tbl_learned_memory.setItem(idx, 0, it_src)
+
+                it_tgt = QTableWidgetItem(tgt)
+                it_tgt.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                it_tgt.setForeground(QColor(ACCENT_PRIMARY))
+                self.tbl_learned_memory.setItem(idx, 1, it_tgt)
+
+                it_rule = QTableWidgetItem(rule)
+                it_rule.setForeground(QColor(ACCENT_PURPLE))
+                self.tbl_learned_memory.setItem(idx, 2, it_rule)
+
+                it_count = QTableWidgetItem(str(count))
+                it_count.setForeground(QColor(ACCENT_SUCCESS))
+                self.tbl_learned_memory.setItem(idx, 3, it_count)
+
         html = f"""
-        <div style="font-family: 'Segoe UI', sans-serif; padding: 12px; color: {TEXT_PRIMARY};">
-            <h3 style="color: {ACCENT_PURPLE}; margin-bottom: 8px;">Adaptive Learning Status</h3>
-            <p><b>Learned Column Associations:</b> {total_mappings}</p>
-            <p><b>Recognized Dataset Fingerprints:</b> {fingerprints}</p>
-            <p style="color: {TEXT_MUTED}; font-size: 11px;">
-                Every time you verify and export a dataset, the system remembers which raw columns map to
-                which sample columns and stores the optimal conversion rules. Subsequent transformations on
-                matching schemas will auto-align with near 100% confidence.
+        <div style="font-family: 'Segoe UI', sans-serif; color: {TEXT_PRIMARY};">
+            <h4 style="color: {ACCENT_PURPLE}; margin-top: 0; margin-bottom: 6px;">How Adaptive Learning Works</h4>
+            <p style="color: {TEXT_SECONDARY}; font-size: 11px; margin-bottom: 4px;">
+                Every time you verify and export a dataset, the system securely stores which raw source columns map
+                to which target sample columns, as well as the inferred conversion rules (date reformatting, currency cleaning,
+                casing, composite joins).
+            </p>
+            <p style="color: {TEXT_MUTED}; font-size: 11px; margin: 0;">
+                Subsequent harmonizations with identical or similar schema fingerprints will automatically align with
+                near 100% confidence, saving you time and eliminating repetitive manual column mapping.
             </p>
         </div>
         """

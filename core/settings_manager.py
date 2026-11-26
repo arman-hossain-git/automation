@@ -49,6 +49,11 @@ DEFAULT_SETTINGS = {
     #   temporarily disable (block from uploading). Does NOT delete the built-in entry.
     "orbund_extra_extensions": {},
     "orbund_disabled_extensions": [],
+    # Local Ollama AI & Adaptive Settings:
+    "ollama_host": "http://127.0.0.1:11434",
+    "ollama_model": "qwen2.5:7b",
+    "enable_ai_self_healing": True,
+    "enable_ai_harmonizer": True,
 }
 
 

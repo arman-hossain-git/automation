@@ -27,7 +27,8 @@ class DataTransformer:
         cls,
         source_df: pd.DataFrame,
         matches: List[ColumnMappingMatch],
-        target_column_order: Optional[List[str]] = None
+        target_column_order: Optional[List[str]] = None,
+        exclude_blank: bool = False,
     ) -> pd.DataFrame:
         """Applies transformation rules to produce a target DataFrame.
 
@@ -35,6 +36,7 @@ class DataTransformer:
             source_df: The combined raw input DataFrame.
             matches: The list of ColumnMappingMatch rules.
             target_column_order: Desired column order (defaults to order of matches).
+            exclude_blank: If True, omits unmapped/blank columns from the output.
         """
         output_data: Dict[str, pd.Series] = {}
         total_rows = len(source_df)
@@ -46,7 +48,8 @@ class DataTransformer:
 
             # Case: Unmapped
             if not match.source_column or rule == "unmapped":
-                output_data[target_col] = pd.Series([""] * total_rows, index=source_df.index)
+                if not exclude_blank:
+                    output_data[target_col] = pd.Series([""] * total_rows, index=source_df.index)
                 continue
 
             # Case: Composite Concat
@@ -94,6 +97,13 @@ class DataTransformer:
                 )
 
         result_df = pd.DataFrame(output_data, index=source_df.index)
+
+        if exclude_blank and not result_df.empty:
+            non_blank_cols = [
+                c for c in result_df.columns
+                if not (result_df[c].fillna("").astype(str).str.strip() == "").all()
+            ]
+            result_df = result_df[non_blank_cols]
 
         # Ensure column ordering matches sample schema
         if target_column_order:

@@ -78,6 +78,16 @@ def run_app(argv=None):
     if argv is None:
         argv = sys.argv
 
+    # Ensure Windows taskbar uses our app icon instead of grouping under python.exe
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "AutomationSuite.UnifiedDashboard.2.0"
+            )
+        except Exception:
+            pass
+
     # ── High-DPI configuration (must be set before QApplication is created) ──
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -91,6 +101,15 @@ def run_app(argv=None):
     app.setApplicationVersion("2.0")
     app.setOrganizationName("Automation Suite")
     app.setPalette(get_dark_palette())
+
+    # Set application-wide icon (taskbar, Alt-Tab, etc.)
+    _assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    _ico_path = os.path.join(_assets_dir, "logo.ico")
+    _png_path = os.path.join(_assets_dir, "logo.png")
+    _icon_path = _ico_path if os.path.isfile(_ico_path) else _png_path
+    if os.path.isfile(_icon_path):
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(_icon_path))
 
     sys.excepthook = _handle_exception
     threading.excepthook = _handle_thread_exception

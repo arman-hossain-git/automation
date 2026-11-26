@@ -6,6 +6,7 @@ block_cipher = None
 
 # Collect all data files needed at runtime
 datas = [
+    ('assets', 'assets'),
     ('pdf_extractor_configs', 'pdf_extractor_configs'),
     ('core', 'core'),
     ('modules', 'modules'),
@@ -244,7 +245,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,              # Replace with 'icon.ico' if you have one
+    icon='assets/logo.ico',   # Yawning cat logo
 )
 
 # Single portable file: no COLLECT step. Everything (interpreter, libs,

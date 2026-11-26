@@ -4,7 +4,7 @@ ui_qt/views/settings_view.py
 Modern PySide6 System Settings view.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QCheckBox, QComboBox, QGroupBox, QFrame, QScrollArea, QPushButton,
@@ -232,6 +232,45 @@ class SettingsView(QWidget):
         # Populate the table now
         self._populate_orbund_table()
 
+        # --- Group: Local AI & Adaptive Automation (Ollama) ---
+        grp_ai = QGroupBox("🧠  Local AI & Adaptive Automation (Ollama)")
+        g_ai = QVBoxLayout(grp_ai)
+        g_ai.setSpacing(10)
+
+        ai_status_row = QHBoxLayout()
+        self.lbl_ai_status = QLabel("Checking Local AI status...")
+        self.lbl_ai_status.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_PRIMARY};")
+        btn_test_ai = QPushButton("🔍 Test Connection")
+        btn_test_ai.setCursor(Qt.PointingHandCursor)
+        btn_test_ai.clicked.connect(lambda: self._test_ollama_connection(show_popup=True))
+        ai_status_row.addWidget(self.lbl_ai_status)
+        ai_status_row.addStretch()
+        ai_status_row.addWidget(btn_test_ai)
+        g_ai.addLayout(ai_status_row)
+
+        ai_grid = QGridLayout()
+        ai_grid.setSpacing(10)
+
+        self.chk_ai_self_healing = QCheckBox("Autonomous Browser Self-Healing (Auto-repair broken buttons/XPaths)")
+        self.chk_ai_self_healing.setChecked(settings.get("enable_ai_self_healing", True))
+        ai_grid.addWidget(self.chk_ai_self_healing, 0, 0)
+
+        self.chk_ai_harmonizer = QCheckBox("Adaptive Schema AI (Auto-match cryptic or non-standard file columns)")
+        self.chk_ai_harmonizer.setChecked(settings.get("enable_ai_harmonizer", True))
+        ai_grid.addWidget(self.chk_ai_harmonizer, 0, 1)
+
+        ai_grid.addWidget(QLabel("Local Model:"), 1, 0)
+        self.combo_ai_model = QComboBox()
+        self.combo_ai_model.addItems(["qwen2.5:7b", "llama3.1:8b", "phi3:mini"])
+        self.combo_ai_model.setCurrentText(settings.get("ollama_model", "qwen2.5:7b"))
+        ai_grid.addWidget(self.combo_ai_model, 1, 1)
+
+        g_ai.addLayout(ai_grid)
+        scroll_layout.addWidget(grp_ai)
+
+        # Trigger initial check on show
+        QTimer.singleShot(500, self._test_ollama_connection)
+
         # --- Group 6: Appearance ---
         grp_theme = QGroupBox("🎨  Appearance")
         g5 = QHBoxLayout(grp_theme)
@@ -293,6 +332,11 @@ class SettingsView(QWidget):
         settings.set("default_download_dir", self.txt_default_dir.text().strip())
         settings.set("theme", THEME_MAP.get(self.combo_theme.currentText(), "system"))
 
+        # Local AI Settings
+        settings.set("enable_ai_self_healing", self.chk_ai_self_healing.isChecked())
+        settings.set("enable_ai_harmonizer", self.chk_ai_harmonizer.isChecked())
+        settings.set("ollama_model", self.combo_ai_model.currentText())
+
         # Orbund file type table → persist disabled built-ins and user-added extras
         self._collect_orbund_table_state()
 
@@ -325,8 +369,43 @@ class SettingsView(QWidget):
         self.combo_log_level.setCurrentText(settings.get("log_level", "INFO"))
         self.chk_confirm_abort.setChecked(settings.get("confirm_on_abort", True))
         self.txt_default_dir.setText(settings.get("default_download_dir", ""))
+        self.chk_ai_self_healing.setChecked(settings.get("enable_ai_self_healing", True))
+        self.chk_ai_harmonizer.setChecked(settings.get("enable_ai_harmonizer", True))
+        self.combo_ai_model.setCurrentText(settings.get("ollama_model", "qwen2.5:7b"))
+        self._test_ollama_connection()
         # Repopulate Orbund table from current settings
         self._populate_orbund_table()
+
+    def _test_ollama_connection(self, show_popup: bool = False):
+        """Checks if local Ollama daemon is reachable (auto-starting if installed) and updates status pill."""
+        from core.ollama_engine import ollama_engine
+        if ollama_engine.ensure_running():
+            ollama_engine.warm_up_async()
+            ver = ollama_engine.get_version() or "Active"
+            models = ollama_engine.list_installed_models()
+            model_info = f" ({len(models)} model{'s' if len(models) != 1 else ''} available)" if models else ""
+            self.lbl_ai_status.setText(f"🟢 Connected to Local Ollama v{ver}{model_info}")
+            self.lbl_ai_status.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {ACCENT_SUCCESS};")
+            if show_popup:
+                installed_str = ", ".join(models) if models else "None"
+                QMessageBox.information(
+                    self,
+                    "Local AI Connected",
+                    f"Local Ollama v{ver} is running and ready.\n\n"
+                    f"Selected model: {self.combo_ai_model.currentText()}\n"
+                    f"Installed models: {installed_str}",
+                )
+        else:
+            self.lbl_ai_status.setText("⚪ Local Ollama Offline (Rule-based deterministic fallback active)")
+            self.lbl_ai_status.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_MUTED};")
+            if show_popup:
+                QMessageBox.warning(
+                    self,
+                    "Local AI Offline",
+                    "Could not reach Local Ollama on this computer.\n\n"
+                    "The software will continue working normally using standard rule-based matching.\n"
+                    "To enable AI features, please start Ollama and click Test Connection again.",
+                )
 
     # ------------------------------------------------------------------
     # Orbund file-type table helpers

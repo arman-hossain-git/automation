@@ -270,7 +270,16 @@ def click_xpath(
     _log = log_func or (lambda l, m: logger.debug(m))
     active_wait = WebDriverWait(driver, timeout_override, poll_frequency=0.2) \
         if timeout_override else wait
-    el = active_wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+    try:
+        el = active_wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+    except (TimeoutException, NoSuchElementException) as err:
+        try:
+            from core.self_healing import click_xpath_adaptive
+            return click_xpath_adaptive(
+                driver, wait, xpath, description, hover_first, timeout_override, log_func
+            )
+        except Exception:
+            raise err
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
     except Exception:

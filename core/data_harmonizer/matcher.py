@@ -16,6 +16,9 @@ from typing import Dict, List, Any, Optional, Tuple, Set
 from dataclasses import dataclass, field
 
 from .profiler import DatasetProfile, ColumnProfile
+from .validator import IntegrityValidator
+from .adaptive_memory import harmonizer_memory
+from core.ollama_engine import ollama_engine
 
 
 @dataclass
@@ -48,6 +51,35 @@ class SchemaMatcher:
         """Matches all columns in sample_profile against candidate columns in source_profile."""
         matches: List[ColumnMappingMatch] = []
         assigned_sources: Set[str] = set()
+
+        # Step 0: Check exact verified fingerprint memory
+        saved_fp_matches = harmonizer_memory.get_exact_fingerprint_mapping(source_profile, sample_profile)
+        if saved_fp_matches:
+            for sample_col, sample_cp in sample_profile.columns.items():
+                if sample_col in saved_fp_matches:
+                    saved = saved_fp_matches[sample_col]
+                    src_col = saved.get("source_column")
+                    rule = saved.get("transformation_rule", "direct")
+                    params = saved.get("rule_params", {})
+                    src_cp = source_profile.columns.get(src_col) if src_col else None
+                    raw_val = src_cp.sample_values[0] if (src_cp and src_cp.sample_values) else ""
+                    trans_val = self._preview_transform(raw_val, rule, params, sample_cp)
+                    matches.append(ColumnMappingMatch(
+                        sample_column=sample_col,
+                        sample_type=sample_cp.inferred_type,
+                        source_column=src_col,
+                        source_type=src_cp.inferred_type if src_cp else None,
+                        confidence=1.0,
+                        tier_reason="Golden Memory (Exact verified dataset signature)",
+                        transformation_rule=rule,
+                        rule_params=params,
+                        sample_raw_preview=raw_val,
+                        sample_transformed_preview=trans_val
+                    ))
+            if len(matches) == len(sample_profile.columns):
+                return matches
+            else:
+                matches.clear()
 
         # Step 1: Detect potential composite columns (e.g., First Name + Last Name -> Full Name)
         composite_matches = self._detect_composite_columns(source_profile, sample_profile)
@@ -113,7 +145,115 @@ class SchemaMatcher:
                     sample_transformed_preview=""
                 ))
 
+        # Step 3: Adaptive AI Matching for low-confidence or unmapped columns
+        self._enhance_with_adaptive_ollama(
+            matches, assigned_sources, source_profile, sample_profile
+        )
+
         return matches
+
+    def _enhance_with_adaptive_ollama(
+        self,
+        matches: List[ColumnMappingMatch],
+        assigned_sources: Set[str],
+        source_profile: DatasetProfile,
+        sample_profile: DatasetProfile,
+    ):
+        """Uses local Ollama with in-context precedents to match remaining ambiguous columns."""
+        import json
+        try:
+            if not ollama_engine.is_available():
+                return
+        except Exception:
+            return
+
+        unassigned_sources = {
+            col: cp for col, cp in source_profile.columns.items()
+            if col not in assigned_sources
+        }
+        if not unassigned_sources:
+            return
+
+        unmapped_targets = [
+            m for m in matches if m.confidence < 0.60 or not m.source_column
+        ]
+        if not unmapped_targets:
+            return
+
+        # Prepare source columns data
+        source_summary = {
+            col: {
+                "inferred_type": cp.inferred_type,
+                "samples": cp.sample_values[:3]
+            }
+            for col, cp in unassigned_sources.items()
+        }
+
+        # Prepare target columns data
+        target_summary = {
+            m.sample_column: {
+                "inferred_type": m.sample_type,
+                "samples": sample_profile.columns[m.sample_column].sample_values[:3] if m.sample_column in sample_profile.columns else []
+            }
+            for m in unmapped_targets
+        }
+
+        # Fetch few-shot precedents
+        precedents = harmonizer_memory.get_few_shot_precedents(limit=10)
+
+        system_prompt = (
+            "You are an expert Data Harmonizer matching source spreadsheet columns to target standard columns.\\n"
+            "Analyze column semantics, sample values, and data formats.\\n"
+            "Adhere strictly to the learned precedents from previous verified runs whenever applicable.\\n"
+            "Output JSON format:\\n"
+            '{"mappings": [{"target_column": "Name", "source_column": "Name", "rule": "direct|clean_currency|date_reformat|case_match", "confidence": 0.95, "reasoning": "brief explanation"}]}'
+        )
+
+        user_prompt = (
+            f"LEARNED PRECEDENTS FROM PREVIOUS RUNS:\\n{json.dumps(precedents, indent=2)}\\n\\n"
+            f"AVAILABLE SOURCE COLUMNS:\\n{json.dumps(source_summary, indent=2)}\\n\\n"
+            f"TARGET COLUMNS NEEDING MATCH:\\n{json.dumps(target_summary, indent=2)}\\n\\n"
+            "Map each target column to the single most appropriate source column if a confident match exists."
+        )
+
+        try:
+            res = ollama_engine.generate_json(system_prompt, user_prompt, timeout=120)
+            mappings = res.get("mappings", [])
+            for item in mappings:
+                tgt = item.get("target_column")
+                src = item.get("source_column")
+                rule = item.get("rule", "direct")
+                conf = float(item.get("confidence", 0.85))
+                reason = item.get("reasoning", "Adaptive AI Semantic Match")
+
+                if not src or src not in unassigned_sources:
+                    continue
+
+                for m in unmapped_targets:
+                    if m.sample_column == tgt:
+                        src_cp = source_profile.columns[src]
+                        # Programmatic Integrity Check
+                        is_compat, boost, explanation = IntegrityValidator.validate_type_compatibility(
+                            src_cp.sample_values, m.sample_type
+                        )
+                        if not is_compat:
+                            continue
+
+                        final_conf = min(0.96, conf + boost)
+                        raw_val = src_cp.sample_values[0] if src_cp.sample_values else ""
+                        trans_val = self._preview_transform(raw_val, rule, {}, sample_profile.columns[tgt])
+
+                        m.source_column = src
+                        m.source_type = src_cp.inferred_type
+                        m.confidence = round(final_conf, 3)
+                        m.tier_reason = f"Adaptive AI ({reason})"
+                        m.transformation_rule = rule
+                        m.sample_raw_preview = raw_val
+                        m.sample_transformed_preview = trans_val
+                        assigned_sources.add(src)
+                        break
+        except Exception as e:
+            pass
 
     def calculate_similarity(
         self,

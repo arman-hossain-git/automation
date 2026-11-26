@@ -12,12 +12,18 @@ Features:
 """
 
 import sys
+import os
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QStackedWidget, QFrame, QScrollArea, QSizePolicy
 )
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QPixmap
+
+# Resolve the assets directory relative to this package's root
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+_LOGO_ICO = os.path.join(_ASSETS_DIR, "logo.ico")
+_LOGO_PNG = os.path.join(_ASSETS_DIR, "logo.png")
 
 from ui_qt.theme import (
     BG_BASE, BG_SIDEBAR, BG_SIDEBAR_ACTIVE, BG_CARD, BG_CARD_ALT, BORDER_SUBTLE,
@@ -246,6 +252,11 @@ class MainWindow(QMainWindow):
         self.resize(1340, 880)
         self.setMinimumSize(1000, 700)
         self.setStyleSheet(get_global_stylesheet())
+
+        # Window icon (title bar + taskbar)
+        icon_path = _LOGO_ICO if os.path.isfile(_LOGO_ICO) else _LOGO_PNG
+        if os.path.isfile(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         self._sidebar_expanded = True
         self._active_tool_id: str = ""

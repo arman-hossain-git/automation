@@ -684,8 +684,41 @@
   },
   "pdf_extractor_profiles": {},
   "data_harmonizer_profiles": {
-    "column_associations": {},
+    "column_associations": {
+      "std_id": {
+        "student_id": {
+          "confirmed": 2,
+          "rejected": 0,
+          "rule": "direct"
+        }
+      },
+      "std_bal": {
+        "balance": {
+          "confirmed": 2,
+          "rejected": 0,
+          "rule": "clean_currency"
+        }
+      }
+    },
     "composite_rules": {},
-    "fingerprint_runs": {}
+    "fingerprint_runs": {
+      "cdb8b01135ebd676:b5ca17c3984fb2d7": {
+        "verified_runs": 2,
+        "saved_mappings": {
+          "student_id": {
+            "source_column": "STD_ID",
+            "transformation_rule": "direct",
+            "rule_params": {},
+            "confidence": 1.0
+          },
+          "balance": {
+            "source_column": "STD_BAL",
+            "transformation_rule": "clean_currency",
+            "rule_params": {},
+            "confidence": 1.0
+          }
+        }
+      }
+    }
   }
 }

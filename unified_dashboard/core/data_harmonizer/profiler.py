@@ -6,6 +6,8 @@ Extracts schema structure, inferred types, datetime formats, value distribution 
 and normalized tokens from tabular datasets (CSV, Excel, JSON, SQLite).
 """
 
+import csv
+import io
 import os
 import re
 import sqlite3
@@ -108,8 +110,245 @@ class DataProfiler:
     """Profiles tabular data from files or databases for intelligent mapping."""
 
     @staticmethod
+    def _read_text_file(source: str) -> str:
+        """Reads a text file trying common encodings."""
+        for encoding in ["utf-8", "utf-8-sig", "latin-1", "cp1252"]:
+            try:
+                with open(source, "r", encoding=encoding, errors="replace") as fh:
+                    return fh.read()
+            except Exception:
+                continue
+        raise ValueError(f"Could not read file: {source}")
+
+    @staticmethod
+    def parse_sql_dump(
+        source: str,
+        target_tables: Optional[Set[str]] = None
+    ) -> Dict[str, pd.DataFrame]:
+        """Parses a plain-text .sql dump file and returns a dict of {table_name: DataFrame}.
+
+        Args:
+            source: Path to the .sql file.
+            target_tables: Optional set/iterable of table names to parse. If provided,
+                INSERT statements for other tables are skipped without parsing VALUES.
+        """
+        target_set = set(target_tables) if target_tables is not None else None
+        text = DataProfiler._read_text_file(source)
+
+        IDENT = r'[`"\[]?(\w+)[`"\]]?'
+        CREATE_HEAD_RE = re.compile(
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?' + IDENT + r'\s*\(',
+            re.IGNORECASE
+        )
+        COL_DEF_RE = re.compile(
+            r'^\s*' + IDENT + r'\s+\w',
+            re.IGNORECASE
+        )
+        INSERT_HEAD_RE = re.compile(
+            r'INSERT\s+(?:IGNORE\s+)?INTO\s+' + IDENT + r'\s*(?:\(([^)]+)\))?\s*VALUES\s*',
+            re.IGNORECASE
+        )
+
+        # --- Parse CREATE TABLE definitions (fast paren-matching, no DOTALL regex) ---
+        table_columns: Dict[str, List[str]] = {}
+        n = len(text)
+        for m in CREATE_HEAD_RE.finditer(text):
+            tname = m.group(1)
+            if target_set is not None and tname not in target_set:
+                continue
+            # Find matching closing paren
+            pos = m.end()
+            depth = 1
+            while pos < n and depth > 0:
+                ch = text[pos]
+                if ch == "'" or ch == '"':
+                    q = ch
+                    pos += 1
+                    while pos < n:
+                        nxt = text.find(q, pos)
+                        if nxt == -1:
+                            pos = n
+                            break
+                        if text[nxt - 1] == '\\':
+                            pos = nxt + 1
+                            continue
+                        pos = nxt + 1
+                        break
+                    continue
+                elif ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                pos += 1
+            body = text[m.end():pos - 1] if depth == 0 else ""
+            cols = []
+            for line in body.split('\n'):
+                line = line.strip().rstrip(',')
+                if not line or line.startswith('--'):
+                    continue
+                upper = line.upper().lstrip()
+                if any(upper.startswith(kw) for kw in (
+                    'PRIMARY', 'UNIQUE', 'KEY', 'INDEX', 'CONSTRAINT',
+                    'FOREIGN', 'CHECK', 'FULLTEXT', 'SPATIAL'
+                )):
+                    continue
+                cm = COL_DEF_RE.match(line)
+                if cm:
+                    cols.append(cm.group(1))
+            if cols:
+                table_columns[tname] = cols
+
+        def _parse_values_from(start_pos: int) -> List[List[Optional[str]]]:
+            """Parses (...),(...); starting right after VALUES using fast str.find for strings."""
+            rows: List[List[Optional[str]]] = []
+            i = start_pos
+            while i < n:
+                ch = text[i]
+                if ch in ' \t\r\n,':
+                    i += 1
+                    continue
+                if ch == ';':
+                    break
+                if ch != '(':
+                    break
+                # Parse one row tuple (...)
+                i += 1
+                row: List[Optional[str]] = []
+                while i < n:
+                    # Skip leading whitespace
+                    while i < n and text[i] in ' \t\r\n':
+                        i += 1
+                    if i >= n:
+                        break
+                    ch = text[i]
+                    if ch == "'" or ch == '"':
+                        q = ch
+                        i += 1
+                        start = i
+                        has_escape = False
+                        while i < n:
+                            nxt = text.find(q, i)
+                            if nxt == -1:
+                                i = n
+                                break
+                            # Count preceding backslashes
+                            bs = 0
+                            k = nxt - 1
+                            while k >= start and text[k] == '\\':
+                                bs += 1
+                                k -= 1
+                            if bs % 2 == 1:
+                                has_escape = True
+                                i = nxt + 1
+                                continue
+                            # Handle doubled quote '' or ""
+                            if nxt + 1 < n and text[nxt + 1] == q:
+                                has_escape = True
+                                i = nxt + 2
+                                continue
+                            val = text[start:nxt]
+                            if has_escape:
+                                val = (
+                                    val.replace("\\'", "'")
+                                       .replace('\\"', '"')
+                                       .replace("''", "'")
+                                       .replace('\\n', '\n')
+                                       .replace('\\t', '\t')
+                                       .replace('\\\\', '\\')
+                                )
+                            row.append(val)
+                            i = nxt + 1
+                            break
+                        # Advance to next comma or closing paren
+                        while i < n and text[i] in ' \t\r\n':
+                            i += 1
+                        if i < n and text[i] == ',':
+                            i += 1
+                            continue
+                        elif i < n and text[i] == ')':
+                            i += 1
+                            break
+                    elif ch == ')':
+                        # Empty or trailing
+                        i += 1
+                        break
+                    else:
+                        # Unquoted token (number, NULL, function call, etc.)
+                        start = i
+                        depth = 0
+                        while i < n:
+                            c2 = text[i]
+                            if c2 == '(':
+                                depth += 1
+                            elif c2 == ')':
+                                if depth == 0:
+                                    break
+                                depth -= 1
+                            elif c2 == ',' and depth == 0:
+                                break
+                            i += 1
+                        tok = text[start:i].strip()
+                        row.append(None if tok.upper() == 'NULL' or tok == '' else tok)
+                        if i < n and text[i] == ',':
+                            i += 1
+                            continue
+                        elif i < n and text[i] == ')':
+                            i += 1
+                            break
+                rows.append(row)
+            return rows
+
+        # --- Parse INSERT INTO statements ---
+        table_rows: Dict[str, List[List[Optional[str]]]] = {}
+        table_col_map: Dict[str, List[str]] = {}
+
+        for m in INSERT_HEAD_RE.finditer(text):
+            tname = m.group(1)
+            if target_set is not None and tname not in target_set:
+                continue
+
+            col_part = m.group(2)
+            if col_part:
+                cols = [c.strip().strip('`"[]') for c in col_part.split(',')]
+            elif tname in table_columns:
+                cols = table_columns[tname]
+            else:
+                cols = None
+
+            parsed_rows = _parse_values_from(m.end())
+
+            if tname not in table_rows:
+                table_rows[tname] = []
+                table_col_map[tname] = cols or []
+            if not table_col_map[tname] and cols:
+                table_col_map[tname] = cols
+            table_rows[tname].extend(parsed_rows)
+
+        # --- Build DataFrames ---
+        result: Dict[str, pd.DataFrame] = {}
+        for tname, rows in table_rows.items():
+            cols = table_col_map.get(tname) or []
+            max_width = max((len(r) for r in rows), default=0)
+            if not cols:
+                cols = [f"col_{i+1}" for i in range(max_width)]
+            if rows and any(len(r) != len(cols) for r in rows):
+                n_cols = len(cols)
+                rows = [
+                    r + [None] * (n_cols - len(r)) if len(r) < n_cols else r[:n_cols]
+                    for r in rows
+                ]
+            result[tname] = pd.DataFrame(rows, columns=cols)
+
+        # Include empty tables from CREATE TABLE if they had no INSERT rows
+        for tname, cols in table_columns.items():
+            if tname not in result:
+                result[tname] = pd.DataFrame(columns=cols)
+
+        return result
+
+    @staticmethod
     def list_sheets_or_tables(source: str) -> List[str]:
-        """Returns sheet names (Excel) or table names (SQLite). Returns empty list for CSV/JSON."""
+        """Returns sheet names (Excel) or table names (SQLite/.sql dump). Returns empty list for CSV/JSON."""
         if not isinstance(source, str) or not os.path.exists(source):
             return []
 
@@ -128,6 +367,17 @@ class DataProfiler:
                 tables = [r[0] for r in cursor.fetchall()]
                 conn.close()
                 return tables
+            except Exception:
+                return []
+        elif ext == ".sql":
+            try:
+                text = DataProfiler._read_text_file(source)
+                # Fast scan for table names without parsing VALUES
+                pattern = re.compile(
+                    r'\b(?:CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|INSERT\s+(?:IGNORE\s+)?INTO\s+)[`"\[]?(\w+)[`"\]]?',
+                    re.IGNORECASE
+                )
+                return list(dict.fromkeys(m.group(1) for m in pattern.finditer(text)))
             except Exception:
                 return []
         return []
@@ -189,24 +439,84 @@ class DataProfiler:
             conn.close()
             return df, f"{base_name} [{table_name}]"
 
+        elif ext == ".sql":
+            target_set = {table_name} if table_name else None
+            tables = DataProfiler.parse_sql_dump(source, target_tables=target_set)
+            if not tables:
+                raise ValueError(f"No tables or INSERT data found in SQL dump: {source}")
+            if table_name:
+                if table_name not in tables:
+                    raise ValueError(f"Table '{table_name}' not found in SQL dump. Available: {list(tables.keys())}")
+                df = tables[table_name]
+            else:
+                table_name = next(iter(tables))
+                df = tables[table_name]
+            return df, f"{base_name} [{table_name}]"
+
         else:
             raise ValueError(f"Unsupported dataset format: {ext}")
 
     @classmethod
+    def profile_selected_sources(
+        cls,
+        source_path: str,
+        table_names: List[str],
+        max_sample_rows: int = 2000,
+    ) -> List[DatasetProfile]:
+        """Batch-profiles selected sheets/tables from a multi-table file in a single open/parse pass."""
+        if not table_names:
+            return []
+
+        base_name = os.path.basename(source_path)
+        ext = os.path.splitext(source_path)[1].lower()
+        profiles: List[DatasetProfile] = []
+
+        if ext == ".sql":
+            tables = cls.parse_sql_dump(source_path, target_tables=set(table_names))
+            for tname in table_names:
+                if tname in tables:
+                    profiles.append(
+                        cls._profile_dataframe(tables[tname], f"{base_name} [{tname}]", max_sample_rows)
+                    )
+            return profiles
+
+        if ext in [".db", ".sqlite", ".sqlite3"]:
+            conn = sqlite3.connect(source_path)
+            try:
+                for tname in table_names:
+                    df = pd.read_sql_query(f'SELECT * FROM "{tname}"', conn)
+                    profiles.append(
+                        cls._profile_dataframe(df, f"{base_name} [{tname}]", max_sample_rows)
+                    )
+            finally:
+                conn.close()
+            return profiles
+
+        if ext in [".xlsx", ".xls", ".xlsm"]:
+            with pd.ExcelFile(source_path) as ef:
+                for tname in table_names:
+                    df = ef.parse(tname)
+                    profiles.append(
+                        cls._profile_dataframe(df, f"{base_name} [{tname}]", max_sample_rows)
+                    )
+            return profiles
+
+        for tname in table_names:
+            profiles.append(cls.profile_dataset(source_path, table_name=tname, max_sample_rows=max_sample_rows))
+        return profiles
+
+    @classmethod
     def profile_all_sources(cls, source_path: str, max_sample_rows: int = 2000) -> List[DatasetProfile]:
-        """Profiles all sheets in an Excel workbook or all tables in an SQLite DB."""
+        """Profiles all sheets in an Excel workbook or all tables in an SQLite/.sql DB."""
         sub_items = cls.list_sheets_or_tables(source_path)
         if len(sub_items) > 1:
-            profiles = []
-            for item in sub_items:
-                try:
-                    prof = cls.profile_dataset(source_path, table_name=item, max_sample_rows=max_sample_rows)
-                    if prof.row_count > 0 and prof.column_count > 0:
-                        profiles.append(prof)
-                except Exception:
-                    continue
-            if profiles:
-                return profiles
+            try:
+                profs = cls.profile_selected_sources(source_path, sub_items, max_sample_rows=max_sample_rows)
+                valid = [p for p in profs if p.row_count > 0 and p.column_count > 0]
+                if valid:
+                    return valid
+            except Exception:
+                pass
 
         return [cls.profile_dataset(source_path, max_sample_rows=max_sample_rows)]
 
@@ -214,6 +524,16 @@ class DataProfiler:
     def profile_dataset(cls, source: Any, table_name: Optional[str] = None, max_sample_rows: int = 2000) -> DatasetProfile:
         """Profiles a complete dataset for schema matching and transformation."""
         df, source_name = cls.load_dataset(source, table_name)
+        return cls._profile_dataframe(df, source_name, max_sample_rows=max_sample_rows)
+
+    @classmethod
+    def _profile_dataframe(
+        cls,
+        df: pd.DataFrame,
+        source_name: str,
+        max_sample_rows: int = 2000,
+    ) -> DatasetProfile:
+        """Profiles an already-loaded DataFrame."""
         row_count = len(df)
         col_count = len(df.columns)
 

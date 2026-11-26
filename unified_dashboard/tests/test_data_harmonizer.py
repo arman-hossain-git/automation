@@ -14,7 +14,10 @@ import sys
 import tempfile
 import sqlite3
 import pandas as pd
-import pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -167,4 +170,14 @@ def test_multitab_excel_profiling_and_combination():
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+if __name__ == "__main__":
+    test_profiler_types()
+    test_smart_union()
+    test_smart_join()
+    test_schema_matching_and_composite()
+    test_adaptive_learning_reinforcement()
+    test_multitab_excel_profiling_and_combination()
+    print("All Data Harmonizer tests passed successfully!")
 

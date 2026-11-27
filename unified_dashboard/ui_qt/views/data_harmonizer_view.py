@@ -15,13 +15,13 @@ import re
 from typing import List, Dict, Any, Optional
 import pandas as pd
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QFileDialog, QMessageBox, QTabWidget, QCheckBox, QProgressBar,
     QSplitter, QScrollArea, QSizePolicy, QDialog, QListWidget, QListWidgetItem, QDialogButtonBox,
-    QAbstractItemView
+    QAbstractItemView, QLineEdit
 )
 from PySide6.QtGui import QFont, QColor
 
@@ -38,6 +38,9 @@ from core.data_harmonizer.combiner import MultiSourceCombiner
 from core.data_harmonizer.matcher import SchemaMatcher, ColumnMappingMatch
 from core.data_harmonizer.transformer import DataTransformer
 from core.data_harmonizer.adaptive_memory import harmonizer_memory
+from core.data_harmonizer.pool_harmonizer import (
+    PoolSourceScanner, TemplatePoolScanner, PoolHarmonizerEngine, PoolHarmonizationResult
+)
 from core.ollama_engine import ollama_engine
 
 
@@ -137,6 +140,65 @@ class SheetSelectionDialog(QDialog):
         return curr.text() if curr else None
 
 
+class PoolScanWorker(QThread):
+    sig_progress = Signal(str, int, int)
+    sig_finished = Signal(list)
+    sig_error = Signal(str)
+
+    def __init__(self, directory_path: str, is_template: bool = False, max_rows: int = 5000, parent=None):
+        super().__init__(parent)
+        self.directory_path = directory_path
+        self.is_template = is_template
+        self.max_rows = max_rows
+
+    def run(self):
+        try:
+            if self.is_template:
+                profiles = TemplatePoolScanner.scan_templates(
+                    self.directory_path,
+                    progress_callback=lambda msg, c, t: self.sig_progress.emit(msg, c, t)
+                )
+            else:
+                profiles = PoolSourceScanner.scan_directory(
+                    self.directory_path,
+                    max_rows_profile=self.max_rows,
+                    progress_callback=lambda msg, c, t: self.sig_progress.emit(msg, c, t)
+                )
+            self.sig_finished.emit(profiles)
+        except Exception as e:
+            self.sig_error.emit(str(e))
+
+
+class PoolHarmonizeWorker(QThread):
+    sig_progress = Signal(str, int, int)
+    sig_finished = Signal(list)
+    sig_error = Signal(str)
+
+    def __init__(self, source_profiles, template_profiles, min_confidence=0.35, learning_engine=None, use_ai=False, parent=None):
+        super().__init__(parent)
+        self.source_profiles = source_profiles
+        self.template_profiles = template_profiles
+        self.min_confidence = min_confidence
+        self.learning_engine = learning_engine
+        self.use_ai = use_ai
+
+    def run(self):
+        try:
+            if self.use_ai:
+                self.sig_progress.emit("Starting local Ollama AI engine...", 0, max(1, len(self.template_profiles)))
+                ollama_engine.ensure_running(wait_seconds=10.0)
+            engine = PoolHarmonizerEngine(learning_engine=self.learning_engine)
+            results = engine.harmonize_pool(
+                source_profiles=self.source_profiles,
+                template_profiles=self.template_profiles,
+                min_confidence=self.min_confidence,
+                progress_callback=lambda msg, c, t: self.sig_progress.emit(msg, c, t)
+            )
+            self.sig_finished.emit(results)
+        except Exception as e:
+            self.sig_error.emit(str(e))
+
+
 class DataHarmonizerView(QWidget):
     """PySide6 modern tabbed view for multi-source data reshaping, normalization, and adaptive harmonization."""
 
@@ -148,6 +210,14 @@ class DataHarmonizerView(QWidget):
         self.combined_profile: Optional[DatasetProfile] = None
         self.current_matches: List[ColumnMappingMatch] = []
         self.transformed_df: Optional[pd.DataFrame] = None
+
+        # Pool & Templates Attributes
+        self.pool_source_profiles: List[DatasetProfile] = []
+        self.pool_template_profiles: List[DatasetProfile] = []
+        self.pool_results: List[PoolHarmonizationResult] = []
+        self.pool_source_dir: str = ""
+        self.pool_template_dir: str = ""
+        self.is_pool_templates_mode: bool = False
 
         self._build_ui()
         self._refresh_learning_stats()
@@ -237,9 +307,9 @@ class DataHarmonizerView(QWidget):
             }}
         """)
 
-        # Tab 1: Datasets & Sources Setup
+        # Tab 1: Data Sources & Templates Setup (Unified files & pool mode)
         self.tab_sources = self._build_sources_tab()
-        self.main_tabs.addTab(self.tab_sources, "📁  1. Datasets & Sources")
+        self.main_tabs.addTab(self.tab_sources, "📁  1. Data Sources & Templates")
 
         # Tab 2: Schema Mapping Matrix & Rules
         self.tab_mapping = self._build_mapping_tab()
@@ -283,17 +353,17 @@ class DataHarmonizerView(QWidget):
         r_layout.setContentsMargins(14, 12, 14, 12)
         r_layout.setSpacing(10)
 
-        r_title = QLabel("1. Raw Source Dataset(s) or Database")
+        r_title = QLabel("1. Raw Source Data (Files or Folder)")
         r_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
         r_layout.addWidget(r_title)
 
-        r_sub = QLabel("Select raw files to reshape into the target standard.")
+        r_sub = QLabel("Load individual files or scan an entire folder of mixed datasets & databases.")
         r_sub.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
         r_layout.addWidget(r_sub)
 
         # Action Buttons
         r_btn_row = QHBoxLayout()
-        self.btn_add_raw = QPushButton("+ Add Raw Files (CSV, XLSX, JSON, DB)")
+        self.btn_add_raw = QPushButton("+ Add Files (CSV, Excel, DB)")
         self.btn_add_raw.setStyleSheet(f"""
             QPushButton {{
                 background-color: {ACCENT_PRIMARY};
@@ -309,6 +379,25 @@ class DataHarmonizerView(QWidget):
         """)
         self.btn_add_raw.clicked.connect(self._browse_raw_files)
         r_btn_row.addWidget(self.btn_add_raw)
+
+        self.btn_add_folder = QPushButton("📁 Add Folder (Pool)")
+        self.btn_add_folder.setToolTip("Scan an entire directory of datasets and databases at once")
+        self.btn_add_folder.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 7px 12px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                border-color: {ACCENT_PRIMARY};
+                background-color: {BG_INPUT};
+            }}
+        """)
+        self.btn_add_folder.clicked.connect(self._browse_and_load_source_folder)
+        r_btn_row.addWidget(self.btn_add_folder)
 
         self.btn_clear_raw = QPushButton("Clear")
         self.btn_clear_raw.setStyleSheet(f"""
@@ -393,17 +482,17 @@ class DataHarmonizerView(QWidget):
         s_layout.setContentsMargins(14, 12, 14, 12)
         s_layout.setSpacing(10)
 
-        s_title = QLabel("2. Sample Target Dataset (Gold Standard Schema)")
+        s_title = QLabel("2. Target Sample Template(s)")
         s_title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
         s_layout.addWidget(s_title)
 
-        s_sub = QLabel("Defines the expected column names, types, order, and format.")
+        s_sub = QLabel("Select a single template file or a folder containing multiple templates.")
         s_sub.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
         s_layout.addWidget(s_sub)
 
         # Action Buttons
         s_btn_row = QHBoxLayout()
-        self.btn_upload_sample = QPushButton("📂 Upload Sample Dataset")
+        self.btn_upload_sample = QPushButton("📂 Add Template File")
         self.btn_upload_sample.setStyleSheet(f"""
             QPushButton {{
                 background-color: {BG_CARD_ALT};
@@ -421,6 +510,25 @@ class DataHarmonizerView(QWidget):
         """)
         self.btn_upload_sample.clicked.connect(self._browse_sample_file)
         s_btn_row.addWidget(self.btn_upload_sample)
+
+        self.btn_browse_pool_template = QPushButton("🗂️ Add Templates Folder")
+        self.btn_browse_pool_template.setToolTip("Select a folder containing multiple sample data templates")
+        self.btn_browse_pool_template.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 7px 12px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                border-color: {ACCENT_PRIMARY};
+                background-color: {BG_INPUT};
+            }}
+        """)
+        self.btn_browse_pool_template.clicked.connect(self._browse_pool_template_dir)
+        s_btn_row.addWidget(self.btn_browse_pool_template)
 
         self.btn_clear_sample = QPushButton("Clear")
         self.btn_clear_sample.setStyleSheet(f"""
@@ -441,11 +549,11 @@ class DataHarmonizerView(QWidget):
         s_btn_row.addStretch()
         s_layout.addLayout(s_btn_row)
 
-        self.lbl_sample_status = QLabel("No sample dataset loaded.")
+        self.lbl_sample_status = QLabel("No sample dataset or template loaded.")
         self.lbl_sample_status.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
         s_layout.addWidget(self.lbl_sample_status)
 
-        # Summary Table for Target Columns
+        # Summary Table for Target Columns / Templates
         self.tbl_sample_columns_summary = QTableWidget(0, 3)
         self.tbl_sample_columns_summary.setHorizontalHeaderLabels(["Target Column Name", "Inferred Type", "Format / Key"])
         self.tbl_sample_columns_summary.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -472,24 +580,53 @@ class DataHarmonizerView(QWidget):
 
         msg_box = QVBoxLayout()
         msg_box.setSpacing(2)
-        lbl_step_note = QLabel("Step 1 Complete: When ready, auto-align schemas and proceed to Mapping Matrix")
-        lbl_step_note.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_PRIMARY}; border: none;")
-        lbl_step_desc = QLabel("Schema matching utilizes learned precedents, type semantics, composite detection, and AI heuristics.")
-        lbl_step_desc.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
-        msg_box.addWidget(lbl_step_note)
-        msg_box.addWidget(lbl_step_desc)
+        self.lbl_step_note = QLabel("Step 1: Load your raw data (left) and target template(s) (right)")
+        self.lbl_step_note.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_PRIMARY}; border: none;")
+        self.lbl_step_desc = QLabel("Offline engine automatically matches schemas, normalizes formats, and joins tables.")
+        self.lbl_step_desc.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
+        msg_box.addWidget(self.lbl_step_note)
+        msg_box.addWidget(self.lbl_step_desc)
         b_layout.addLayout(msg_box)
 
         b_layout.addStretch()
 
-        self.btn_analyze = QPushButton("⚡ Align Schemas & Auto-Match Mappings ➜")
+        self.chk_use_ai_fallback = QCheckBox("Use Local Ollama AI")
+        self.chk_use_ai_fallback.setChecked(ollama_engine.has_executable())
+        self.chk_use_ai_fallback.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-right: 12px;")
+        b_layout.addWidget(self.chk_use_ai_fallback)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(12)
+        self.progress_bar.setFixedWidth(140)
+        self.progress_bar.setVisible(False)
+        b_layout.addWidget(self.progress_bar)
+
+        self.btn_inspect_mappings = QPushButton("🔗 Inspect Mappings")
+        self.btn_inspect_mappings.setEnabled(False)
+        self.btn_inspect_mappings.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_SECONDARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 10px 14px;
+                font-size: 12px;
+            }}
+            QPushButton:hover:!disabled {{
+                color: {TEXT_PRIMARY};
+            }}
+        """)
+        self.btn_inspect_mappings.clicked.connect(lambda: self.main_tabs.setCurrentIndex(1))
+        b_layout.addWidget(self.btn_inspect_mappings)
+
+        self.btn_analyze = QPushButton("⚡ Harmonize & Preview Output ➜")
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.setStyleSheet(f"""
             QPushButton {{
-                background-color: {ACCENT_PURPLE};
+                background-color: {ACCENT_PRIMARY};
                 color: #FFFFFF;
                 border-radius: 6px;
-                padding: 10px 20px;
+                padding: 10px 22px;
                 font-size: 13px;
                 font-weight: 700;
             }}
@@ -498,10 +635,10 @@ class DataHarmonizerView(QWidget):
                 color: {TEXT_MUTED};
             }}
             QPushButton:hover:!disabled {{
-                background-color: #7C3AED;
+                background-color: {ACCENT_PRIMARY_HOVER};
             }}
         """)
-        self.btn_analyze.clicked.connect(self._align_and_match)
+        self.btn_analyze.clicked.connect(self._on_harmonize_clicked)
         b_layout.addWidget(self.btn_analyze)
 
         layout.addWidget(banner)
@@ -631,6 +768,48 @@ class DataHarmonizerView(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(12)
 
+        # ── Pool Results Selector (shown only when pool harmonization was run) ──
+        self.frame_pool_selector = QFrame()
+        self.frame_pool_selector.setStyleSheet(
+            f"background-color: {BG_CARD}; border: 1px solid {BORDER_SUBTLE}; border-radius: 8px;"
+        )
+        self.frame_pool_selector.setVisible(False)
+        ps_layout = QHBoxLayout(self.frame_pool_selector)
+        ps_layout.setContentsMargins(14, 8, 14, 8)
+        ps_layout.setSpacing(14)
+
+        lbl_sel = QLabel("🗂️  Template Output:")
+        lbl_sel.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {TEXT_PRIMARY}; border: none;")
+        ps_layout.addWidget(lbl_sel)
+
+        self.combo_pool_results = QComboBox()
+        self.combo_pool_results.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 5px;
+                padding: 4px 10px;
+                font-size: 11px;
+                min-width: 280px;
+            }}
+        """)
+        self.combo_pool_results.currentIndexChanged.connect(self._on_pool_template_selected)
+        ps_layout.addWidget(self.combo_pool_results, stretch=1)
+
+        self.lbl_pool_cur_mode = QLabel("Sources Used: -")
+        self.lbl_pool_cur_mode.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
+        ps_layout.addWidget(self.lbl_pool_cur_mode)
+
+        self.badge_pool_cur_score = StatusBadge("0% Matched", "neutral")
+        ps_layout.addWidget(self.badge_pool_cur_score)
+
+        self.lbl_pool_cur_rows = QLabel("0 rows")
+        self.lbl_pool_cur_rows.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; border: none;")
+        ps_layout.addWidget(self.lbl_pool_cur_rows)
+
+        layout.addWidget(self.frame_pool_selector)
+
         # ── Sub-tabs for Previews ──
         self.tabs_preview = QTabWidget()
         self.tabs_preview.setStyleSheet(f"""
@@ -752,6 +931,50 @@ class DataHarmonizerView(QWidget):
         """)
         self.btn_export.clicked.connect(self._export_harmonized_data)
         exp_layout.addWidget(self.btn_export)
+
+        # ── Pool-mode export buttons (hidden unless pool run was done) ──
+        self.btn_export_single_pool = QPushButton("💾 Export Selected Output...")
+        self.btn_export_single_pool.setEnabled(False)
+        self.btn_export_single_pool.setVisible(False)
+        self.btn_export_single_pool.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 9px 14px;
+                font-size: 12px;
+            }}
+            QPushButton:hover:!disabled {{
+                background-color: {ACCENT_PRIMARY};
+                color: #FFFFFF;
+            }}
+        """)
+        self.btn_export_single_pool.clicked.connect(self._export_selected_pool_result)
+        exp_layout.addWidget(self.btn_export_single_pool)
+
+        self.btn_export_all_pool = QPushButton("🚀 Export ALL Outputs to Folder...")
+        self.btn_export_all_pool.setEnabled(False)
+        self.btn_export_all_pool.setVisible(False)
+        self.btn_export_all_pool.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ACCENT_SUCCESS};
+                color: #FFFFFF;
+                border-radius: 6px;
+                padding: 9px 20px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QPushButton:hover:!disabled {{
+                background-color: #059669;
+            }}
+            QPushButton:disabled {{
+                background-color: {BG_CARD_ALT};
+                color: {TEXT_MUTED};
+            }}
+        """)
+        self.btn_export_all_pool.clicked.connect(self._export_all_pool_results)
+        exp_layout.addWidget(self.btn_export_all_pool)
 
         layout.addWidget(export_card)
         return tab
@@ -972,10 +1195,14 @@ class DataHarmonizerView(QWidget):
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            self.is_pool_templates_mode = False
+            self.pool_template_profiles = []
             self.sample_profile = DataProfiler.profile_dataset(f, table_name=chosen_sheet)
             self.lbl_sample_status.setText(
                 f"✅ Sample: {self.sample_profile.source_name} ({self.sample_profile.column_count} cols, {self.sample_profile.row_count} sample rows)"
             )
+            self.tbl_sample_columns_summary.setColumnCount(3)
+            self.tbl_sample_columns_summary.setHorizontalHeaderLabels(["Target Column Name", "Inferred Type", "Format / Key"])
             # Populate sample columns summary table
             self._update_sample_summary_table()
             self._check_ready()
@@ -1008,13 +1235,34 @@ class DataHarmonizerView(QWidget):
 
     def _clear_sample_file(self):
         self.sample_profile = None
-        self.lbl_sample_status.setText("No sample dataset loaded.")
+        self.pool_template_profiles = []
+        self.is_pool_templates_mode = False
+        self.lbl_sample_status.setText("No sample dataset or template loaded.")
         self.tbl_sample_columns_summary.setRowCount(0)
+        # Restore normal column headers
+        self.tbl_sample_columns_summary.setColumnCount(3)
+        self.tbl_sample_columns_summary.setHorizontalHeaderLabels(["Target Column Name", "Inferred Type", "Format / Key"])
         self._check_ready()
 
     def _check_ready(self):
-        ready = bool(self.raw_profiles and self.sample_profile)
+        """Enable the main action button when sufficient data is loaded for either mode."""
+        if self.is_pool_templates_mode:
+            # Pool mode: need raw sources AND pool templates
+            ready = bool(self.raw_profiles and self.pool_template_profiles)
+            label = "⚡ Run Autonomous Pool Harmonization ➜"
+        else:
+            # Single-template mode: need raw sources AND one sample profile
+            ready = bool(self.raw_profiles and self.sample_profile)
+            label = "⚡ Harmonize & Preview Output ➜"
+        self.btn_analyze.setText(label)
         self.btn_analyze.setEnabled(ready)
+
+    def _on_harmonize_clicked(self):
+        """Dispatcher: run pool harmonization or single-template harmonization."""
+        if self.is_pool_templates_mode:
+            self._run_pool_harmonization()
+        else:
+            self._align_and_match()
 
     # ------------------------------------------------------------------
     # Align & Schema Matching
@@ -1027,21 +1275,22 @@ class DataHarmonizerView(QWidget):
 
         try:
             mode_choice = self.combo_combine_mode.currentText()
+            active_raw_profiles = [PoolHarmonizerEngine._ensure_full_profile(p) for p in self.raw_profiles]
 
             # Step 1: Combine multi-source raw datasets if needed
-            if len(self.raw_profiles) == 1:
-                self.combined_raw_df = self.raw_profiles[0].raw_df.copy()
-                self.combined_profile = self.raw_profiles[0]
+            if len(active_raw_profiles) == 1:
+                self.combined_raw_df = active_raw_profiles[0].raw_df.copy()
+                self.combined_profile = active_raw_profiles[0]
             elif "Union" in mode_choice:
-                df, det = MultiSourceCombiner.smart_union(self.raw_profiles)
+                df, det = MultiSourceCombiner.smart_union(active_raw_profiles)
                 self.combined_raw_df = df
                 self.combined_profile = DataProfiler.profile_dataset(df)
             elif "Join" in mode_choice:
-                df, det = MultiSourceCombiner.smart_join(self.raw_profiles)
+                df, det = MultiSourceCombiner.smart_join(active_raw_profiles)
                 self.combined_raw_df = df
                 self.combined_profile = DataProfiler.profile_dataset(df)
             else:  # Auto-Detect
-                df, mode, det = MultiSourceCombiner.auto_combine(self.raw_profiles)
+                df, mode, det = MultiSourceCombiner.auto_combine(active_raw_profiles)
                 self.combined_raw_df = df
                 self.combined_profile = DataProfiler.profile_dataset(df)
 
@@ -1058,6 +1307,11 @@ class DataHarmonizerView(QWidget):
 
             self.btn_reapply_all.setVisible(True)
             self.btn_export.setEnabled(True)
+
+            # Hide pool selector for single-template runs
+            self.frame_pool_selector.setVisible(False)
+            self.btn_export_single_pool.setVisible(False)
+            self.btn_export_all_pool.setVisible(False)
 
             high_conf = sum(1 for m in self.current_matches if m.confidence >= 0.85)
             self.lbl_match_summary.setText(
@@ -1462,3 +1716,259 @@ class DataHarmonizerView(QWidget):
             learning_engine.save(force=True)
             self._refresh_learning_stats()
             QMessageBox.information(self, "Memory Reset", "Data Harmonizer learned memory has been reset.")
+
+    def _browse_and_load_source_folder(self):
+        """Scans an entire directory of datasets and databases into Tab 1 asynchronously."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder Containing Raw Datasets/Databases")
+        if not folder:
+            return
+        self.btn_add_folder.setEnabled(False)
+        self.btn_add_folder.setText("⏳ Scanning Folder...")
+
+        self.tab1_scan_worker = PoolScanWorker(folder, is_template=False, max_rows=5000, parent=self)
+        def on_prog(msg, cur, tot):
+            self.lbl_raw_status.setText(f"[{cur}/{tot}] {msg}")
+
+        def on_done(discovered):
+            self.btn_add_folder.setEnabled(True)
+            self.btn_add_folder.setText("📁 Add Folder (Pool)")
+            if not discovered:
+                QMessageBox.information(self, "No Datasets Found", "No supported datasets or databases were found in this folder.")
+                return
+            self.raw_profiles.extend(discovered)
+            self._update_raw_status()
+            self._check_ready()
+            QMessageBox.information(
+                self,
+                "Folder Ingested",
+                f"Successfully discovered and profiled {len(discovered)} dataset table(s) from:\n{folder}"
+            )
+
+        def on_err(err_str):
+            self.btn_add_folder.setEnabled(True)
+            self.btn_add_folder.setText("📁 Add Folder (Pool)")
+            QMessageBox.critical(self, "Scan Error", f"Failed to scan folder:\n{err_str}")
+
+        self.tab1_scan_worker.sig_progress.connect(on_prog)
+        self.tab1_scan_worker.sig_finished.connect(on_done)
+        self.tab1_scan_worker.sig_error.connect(on_err)
+        self.tab1_scan_worker.start()
+    def _browse_pool_source_dir(self):
+        """Legacy method: now redirects to the unified Add Folder flow in Tab 1."""
+        self._browse_and_load_source_folder()
+
+    def _scan_pool_source_dir(self):
+        """Legacy method: source scanning is handled via _browse_and_load_source_folder."""
+        pass
+
+    def _browse_pool_template_dir(self):
+        """Selects a folder of sample templates (pool mode)."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Sample Templates Folder")
+        if not folder:
+            return
+        self.pool_template_dir = folder
+        self.is_pool_templates_mode = True
+        self.lbl_sample_status.setText(f"⏳ Scanning templates folder: {folder}")
+        self._scan_pool_template_dir()
+
+    def _scan_pool_template_dir(self):
+        """Scans and profiles all sample templates in the template directory asynchronously."""
+        if not self.pool_template_dir or not os.path.isdir(self.pool_template_dir):
+            return
+
+        self.btn_browse_pool_template.setEnabled(False)
+        self.lbl_sample_status.setText("⏳ Analyzing sample templates in background...")
+        self.tbl_sample_columns_summary.setRowCount(0)
+
+        self.pool_tpl_worker = PoolScanWorker(self.pool_template_dir, is_template=True, parent=self)
+
+        def on_prog(msg, cur, tot):
+            self.lbl_sample_status.setText(f"[{cur}/{tot}] {msg}")
+
+        def on_done(profiles):
+            self.btn_browse_pool_template.setEnabled(True)
+            self.pool_template_profiles = profiles
+            # Show discovered templates in the sample columns table (repurposed)
+            self.tbl_sample_columns_summary.setColumnCount(3)
+            self.tbl_sample_columns_summary.setHorizontalHeaderLabels(["Template Name", "Format", "Expected Columns"])
+            self.tbl_sample_columns_summary.setRowCount(len(self.pool_template_profiles))
+            for idx, p in enumerate(self.pool_template_profiles):
+                it_name = QTableWidgetItem(p.source_name)
+                it_name.setForeground(QColor(TEXT_PRIMARY))
+                self.tbl_sample_columns_summary.setItem(idx, 0, it_name)
+
+                fmt = os.path.splitext(p.source_name)[1].upper() if "." in p.source_name else "FILE"
+                it_fmt = QTableWidgetItem(fmt)
+                it_fmt.setForeground(QColor(ACCENT_PURPLE))
+                self.tbl_sample_columns_summary.setItem(idx, 1, it_fmt)
+
+                cols_summary = ", ".join(p.column_order[:4]) + (f" (+{len(p.column_order)-4} more)" if len(p.column_order) > 4 else "")
+                it_cols = QTableWidgetItem(f"{p.column_count} cols ({cols_summary})")
+                it_cols.setForeground(QColor(TEXT_SECONDARY))
+                self.tbl_sample_columns_summary.setItem(idx, 2, it_cols)
+
+            total_templates = len(self.pool_template_profiles)
+            self.lbl_sample_status.setText(f"✅ Found {total_templates} target sample template(s). Ready for pool harmonization.")
+            self._check_ready()
+
+        def on_err(err_str):
+            self.btn_browse_pool_template.setEnabled(True)
+            self.lbl_sample_status.setText(f"Error scanning templates: {err_str}")
+            QMessageBox.critical(self, "Scan Error", f"Failed to scan templates directory:\n{err_str}")
+
+        self.pool_tpl_worker.sig_progress.connect(on_prog)
+        self.pool_tpl_worker.sig_finished.connect(on_done)
+        self.pool_tpl_worker.sig_error.connect(on_err)
+        self.pool_tpl_worker.start()
+
+    def _check_ready_for_pool_run(self):
+        """Check pool readiness — now delegates to unified _check_ready()."""
+        self._check_ready()
+
+    def _run_pool_harmonization(self):
+        """Executes the autonomous pool-to-pool harmonization across all templates asynchronously."""
+        if not self.raw_profiles or not self.pool_template_profiles:
+            QMessageBox.warning(
+                self, "Missing Data",
+                "Please load source datasets (left panel) and a templates folder (right panel) before running."
+            )
+            return
+
+        self.btn_analyze.setEnabled(False)
+        self.lbl_step_note.setText("⏳ Running autonomous pool harmonization in background...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, len(self.pool_template_profiles))
+        self.progress_bar.setValue(0)
+
+        self.harmonize_worker = PoolHarmonizeWorker(
+            source_profiles=self.raw_profiles,
+            template_profiles=self.pool_template_profiles,
+            min_confidence=0.35,
+            learning_engine=learning_engine,
+            use_ai=self.chk_use_ai_fallback.isChecked(),
+            parent=self
+        )
+
+        def on_prog(msg, cur, tot):
+            self.lbl_step_note.setText(f"[{cur}/{tot}] {msg}")
+            self.progress_bar.setValue(cur)
+
+        def on_done(results):
+            self.pool_results = results
+            # Populate the Tab 3 results selector
+            self.combo_pool_results.blockSignals(True)
+            self.combo_pool_results.clear()
+            for r in self.pool_results:
+                badge_pct = f"{int(r.completeness_score * 100)}%"
+                self.combo_pool_results.addItem(f"{r.template_name} ({badge_pct} match - {r.row_count:,} rows)")
+            self.combo_pool_results.blockSignals(False)
+
+            if self.pool_results:
+                self.frame_pool_selector.setVisible(True)
+                self.btn_export_all_pool.setVisible(True)
+                self.combo_pool_results.setCurrentIndex(0)
+                self._on_pool_template_selected(0)
+                self.btn_export_all_pool.setEnabled(True)
+
+            self.lbl_step_note.setText(f"✅ Harmonized {len(self.pool_results)} templates successfully.")
+            self.progress_bar.setVisible(False)
+            self.btn_analyze.setEnabled(True)
+
+            # Auto-reinforce learning engine
+            for res in self.pool_results:
+                if res.status in ["success", "partial"]:
+                    harmonizer_memory.record_user_feedback(
+                        source_profile=res.template_profile,
+                        sample_profile=res.template_profile,
+                        matches=res.matches
+                    )
+            self._refresh_learning_stats()
+
+            # Switch to Tab 3 to show results
+            self.main_tabs.setCurrentIndex(2)
+
+            QMessageBox.information(
+                self,
+                "Harmonization Complete",
+                f"Successfully processed all {len(self.pool_results)} templates!\n"
+                f"You can now preview each template output or click 'Export ALL Outputs' to save them all."
+            )
+
+        def on_err(err_str):
+            self.lbl_step_note.setText("❌ Error during pool run.")
+            self.progress_bar.setVisible(False)
+            self.btn_analyze.setEnabled(True)
+            QMessageBox.critical(self, "Harmonization Error", f"Autonomous harmonization encountered an error:\n{err_str}")
+
+        self.harmonize_worker.sig_progress.connect(on_prog)
+        self.harmonize_worker.sig_finished.connect(on_done)
+        self.harmonize_worker.sig_error.connect(on_err)
+        self.harmonize_worker.start()
+
+    def _on_pool_template_selected(self, index: int):
+        """Displays preview and metadata for the selected pool harmonization result."""
+        if index < 0 or index >= len(self.pool_results):
+            return
+
+        res = self.pool_results[index]
+        mode_str = res.combination_mode.upper()
+        sources_str = ", ".join(res.source_tables_used) if res.source_tables_used else "None"
+        self.lbl_pool_cur_mode.setText(f"Sources Used: {sources_str} [{mode_str}]")
+
+        pct = int(res.completeness_score * 100)
+        badge_style = "success" if pct >= 80 else ("warning" if pct > 0 else "danger")
+        self.badge_pool_cur_score.set_variant(
+            badge_style,
+            f"{pct}% Schema Match ({res.matched_columns_count}/{res.total_columns_count} cols)"
+        )
+
+        self.lbl_pool_cur_rows.setText(f"{res.row_count:,} rows")
+
+        # Enable single export
+        self.btn_export_single_pool.setEnabled(True)
+        self.btn_export_single_pool.setVisible(True)
+
+        # Render preview dataframe (up to first 50 rows) into Tab 3 output table
+        preview_df = res.output_df.head(50) if not res.output_df.empty else pd.DataFrame(columns=res.template_profile.column_order)
+        self._render_dataframe_to_table(preview_df, self.tbl_out_preview)
+
+    def _export_selected_pool_result(self):
+        """Exports the currently displayed template result to disk."""
+        idx = self.combo_pool_results.currentIndex()
+        if idx < 0 or idx >= len(self.pool_results):
+            return
+        res = self.pool_results[idx]
+        clean_name = os.path.splitext(res.template_name)[0]
+        dest_path, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Save Harmonized {res.template_name}",
+            f"Harmonized_{clean_name}.xlsx",
+            "Excel Workbook (*.xlsx);;CSV (*.csv);;JSON (*.json)"
+        )
+        if not dest_path:
+            return
+        try:
+            DataTransformer.export_dataset(res.output_df, dest_path)
+            QMessageBox.information(self, "Exported", f"Successfully exported to:\n{dest_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export dataset:\n{e}")
+
+    def _export_all_pool_results(self):
+        """Exports all harmonized template results to a target output folder."""
+        if not self.pool_results:
+            return
+        dest_dir = QFileDialog.getExistingDirectory(self, "Select Destination Folder for All Outputs")
+        if not dest_dir:
+            return
+        try:
+            manifest = PoolHarmonizerEngine.export_all(self.pool_results, dest_dir, file_format="xlsx")
+            manifest_csv = os.path.join(dest_dir, "_harmonization_manifest.csv")
+            QMessageBox.information(
+                self,
+                "Batch Export Complete",
+                f"Successfully exported {len(manifest)} harmonized dataset(s) to:\n{dest_dir}\n\n"
+                f"An audit manifest has been written to:\n{manifest_csv}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to batch export datasets:\n{e}")
+

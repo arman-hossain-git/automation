@@ -9,6 +9,13 @@ from .profiler import DataProfiler, ColumnProfile, DatasetProfile
 from .combiner import MultiSourceCombiner
 from .matcher import SchemaMatcher, ColumnMappingMatch
 from .transformer import DataTransformer
+from .pool_harmonizer import (
+    PoolSourceScanner,
+    TemplatePoolScanner,
+    PoolJoinGraph,
+    PoolHarmonizerEngine,
+    PoolHarmonizationResult,
+)
 
 __all__ = [
     "DataProfiler",
@@ -18,4 +25,10 @@ __all__ = [
     "SchemaMatcher",
     "ColumnMappingMatch",
     "DataTransformer",
+    "PoolSourceScanner",
+    "TemplatePoolScanner",
+    "PoolJoinGraph",
+    "PoolHarmonizerEngine",
+    "PoolHarmonizationResult",
 ]
+

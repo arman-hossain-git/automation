@@ -56,3 +56,7 @@ Thumbs.db
 
 # pytest
 .pytest_cache/
+
+# Bundled Ollama portable binary + models (~1.1 GB) - download separately
+vendor/ollama/
+

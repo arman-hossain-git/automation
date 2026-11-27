@@ -104,6 +104,9 @@ class DatasetProfile:
     column_order: List[str]
     fingerprint: str
     raw_df: Optional[pd.DataFrame] = None
+    source_path: Optional[str] = None
+    table_name: Optional[str] = None
+    is_sampled: bool = False
 
 
 class DataProfiler:
@@ -123,7 +126,9 @@ class DataProfiler:
     @staticmethod
     def parse_sql_dump(
         source: str,
-        target_tables: Optional[Set[str]] = None
+        target_tables: Optional[Set[str]] = None,
+        max_rows_per_table: Optional[int] = 5000,
+        max_file_read_mb: int = 100
     ) -> Dict[str, pd.DataFrame]:
         """Parses a plain-text .sql dump file and returns a dict of {table_name: DataFrame}.
 
@@ -131,23 +136,77 @@ class DataProfiler:
             source: Path to the .sql file.
             target_tables: Optional set/iterable of table names to parse. If provided,
                 INSERT statements for other tables are skipped without parsing VALUES.
+            max_rows_per_table: Maximum rows to sample per table for profiling (prevents OOM on huge dumps).
+            max_file_read_mb: Max megabytes to read if dump is massive.
         """
         target_set = set(target_tables) if target_tables is not None else None
-        text = DataProfiler._read_text_file(source)
-
-        IDENT = r'[`"\[]?(\w+)[`"\]]?'
+        
+        IDENT = r'(?:[`"\[]?\w+[`"\]]?\.)?[`"\[]?(\w+)[`"\]]?'
         CREATE_HEAD_RE = re.compile(
             r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?' + IDENT + r'\s*\(',
             re.IGNORECASE
         )
         COL_DEF_RE = re.compile(
-            r'^\s*' + IDENT + r'\s+\w',
+            r'^\s*[`"\[]?(\w+)[`"\]]?\s+\w',
             re.IGNORECASE
         )
         INSERT_HEAD_RE = re.compile(
             r'INSERT\s+(?:IGNORE\s+)?INTO\s+' + IDENT + r'\s*(?:\(([^)]+)\))?\s*VALUES\s*',
             re.IGNORECASE
         )
+
+        # For huge dumps (> max_file_read_mb), stream line-by-line keeping all CREATE TABLE
+        # statements and a bounded number of INSERT chunks per table so later tables are never cut off.
+        file_size_mb = os.path.getsize(source) / (1024 * 1024) if os.path.exists(source) else 0
+        if file_size_mb > max_file_read_mb:
+            chunks: List[str] = []
+            insert_lines_per_table: Dict[str, int] = {}
+            in_create = False
+            cur_insert_table: Optional[str] = None
+            keep_cur_insert = False
+            for encoding in ["utf-8", "utf-8-sig", "latin-1", "cp1252"]:
+                try:
+                    with open(source, "r", encoding=encoding, errors="replace") as fh:
+                        for line in fh:
+                            if not in_create and cur_insert_table is None:
+                                cm = CREATE_HEAD_RE.search(line)
+                                if cm:
+                                    tname = cm.group(1)
+                                    if target_set is None or tname in target_set:
+                                        chunks.append(line)
+                                        if ";" not in line:
+                                            in_create = True
+                                    continue
+                                im = INSERT_HEAD_RE.search(line)
+                                if im:
+                                    tname = im.group(1)
+                                    if (target_set is None or tname in target_set) and insert_lines_per_table.get(tname, 0) < 50:
+                                        insert_lines_per_table[tname] = insert_lines_per_table.get(tname, 0) + 1
+                                        chunks.append(line)
+                                        if not line.rstrip().endswith(";"):
+                                            cur_insert_table = tname
+                                            keep_cur_insert = True
+                                    elif not line.rstrip().endswith(";"):
+                                        cur_insert_table = tname
+                                        keep_cur_insert = False
+                                    continue
+                            elif in_create:
+                                chunks.append(line)
+                                if ";" in line:
+                                    in_create = False
+                            elif cur_insert_table is not None:
+                                if keep_cur_insert:
+                                    chunks.append(line)
+                                if line.rstrip().endswith(";"):
+                                    cur_insert_table = None
+                                    keep_cur_insert = False
+                    break
+                except Exception:
+                    chunks.clear()
+                    continue
+            text = "".join(chunks)
+        else:
+            text = DataProfiler._read_text_file(source)
 
         # --- Parse CREATE TABLE definitions (fast paren-matching, no DOTALL regex) ---
         table_columns: Dict[str, List[str]] = {}
@@ -307,6 +366,10 @@ class DataProfiler:
             if target_set is not None and tname not in target_set:
                 continue
 
+            # Early skip if table has already reached sample quota
+            if max_rows_per_table and tname in table_rows and len(table_rows[tname]) >= max_rows_per_table:
+                continue
+
             col_part = m.group(2)
             if col_part:
                 cols = [c.strip().strip('`"[]') for c in col_part.split(',')]
@@ -316,6 +379,9 @@ class DataProfiler:
                 cols = None
 
             parsed_rows = _parse_values_from(m.end())
+            if max_rows_per_table:
+                curr_len = len(table_rows.get(tname, []))
+                parsed_rows = parsed_rows[:max(0, max_rows_per_table - curr_len)]
 
             if tname not in table_rows:
                 table_rows[tname] = []
@@ -371,22 +437,31 @@ class DataProfiler:
                 return []
         elif ext == ".sql":
             try:
-                text = DataProfiler._read_text_file(source)
-                # Fast scan for table names without parsing VALUES
                 pattern = re.compile(
-                    r'\b(?:CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|INSERT\s+(?:IGNORE\s+)?INTO\s+)[`"\[]?(\w+)[`"\]]?',
+                    r'\b(?:CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|INSERT\s+(?:IGNORE\s+)?INTO\s+)(?:[`"\[]?\w+[`"\]]?\.)?[`"\[]?(\w+)[`"\]]?',
                     re.IGNORECASE
                 )
-                return list(dict.fromkeys(m.group(1) for m in pattern.finditer(text)))
+                seen: Dict[str, None] = {}
+                for encoding in ["utf-8", "utf-8-sig", "latin-1", "cp1252"]:
+                    try:
+                        with open(source, "r", encoding=encoding, errors="replace") as fh:
+                            for line in fh:
+                                if "CREATE" in line.upper() or "INSERT" in line.upper():
+                                    for m in pattern.finditer(line):
+                                        seen[m.group(1)] = None
+                        break
+                    except Exception:
+                        continue
+                return list(seen.keys())
             except Exception:
                 return []
         return []
 
     @staticmethod
-    def load_dataset(source: Any, table_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
+    def load_dataset(source: Any, table_name: Optional[str] = None, max_sample_rows: Optional[int] = None) -> Tuple[pd.DataFrame, str]:
         """Loads dataset into a Pandas DataFrame from file path, DataFrame, or SQLite DB.
 
-        Supports specific sheet names for Excel via table_name.
+        Supports specific sheet names for Excel via table_name, and row sampling for large DBs.
         Returns:
             (DataFrame, source_name_str)
         """
@@ -404,25 +479,27 @@ class DataProfiler:
             for encoding in ["utf-8", "utf-8-sig", "latin-1", "cp1252"]:
                 try:
                     sep = "\t" if ext == ".tsv" else None
-                    df = pd.read_csv(source, sep=sep, encoding=encoding, engine="python", on_bad_lines="skip")
+                    df = pd.read_csv(source, sep=sep, encoding=encoding, engine="python", on_bad_lines="skip", nrows=max_sample_rows)
                     return df, base_name
                 except Exception:
                     continue
             # Fallback
-            df = pd.read_csv(source, encoding="utf-8", on_bad_lines="skip")
+            df = pd.read_csv(source, encoding="utf-8", on_bad_lines="skip", nrows=max_sample_rows)
             return df, base_name
 
         elif ext in [".xlsx", ".xls", ".xlsm"]:
             sheet = table_name if table_name is not None else 0
-            df = pd.read_excel(source, sheet_name=sheet)
+            df = pd.read_excel(source, sheet_name=sheet, nrows=max_sample_rows)
             label = f"{base_name} [{table_name}]" if table_name is not None else base_name
             return df, label
 
         elif ext == ".json":
             try:
                 df = pd.read_json(source)
+                if max_sample_rows and len(df) > max_sample_rows:
+                    df = df.head(max_sample_rows)
             except ValueError:
-                df = pd.read_json(source, lines=True)
+                df = pd.read_json(source, lines=True, nrows=max_sample_rows)
             return df, base_name
 
         elif ext in [".db", ".sqlite", ".sqlite3"]:
@@ -435,13 +512,16 @@ class DataProfiler:
                     conn.close()
                     raise ValueError(f"No tables found in SQLite database {source}")
                 table_name = tables[0]
-            df = pd.read_sql_query(f'SELECT * FROM "{table_name}"', conn)
+            limit_clause = f" LIMIT {max_sample_rows}" if max_sample_rows else ""
+            df = pd.read_sql_query(f'SELECT * FROM "{table_name}"{limit_clause}', conn)
             conn.close()
             return df, f"{base_name} [{table_name}]"
 
         elif ext == ".sql":
             target_set = {table_name} if table_name else None
-            tables = DataProfiler.parse_sql_dump(source, target_tables=target_set)
+            tables = DataProfiler.parse_sql_dump(
+                source, target_tables=target_set, max_rows_per_table=max_sample_rows or 5000
+            )
             if not tables:
                 raise ValueError(f"No tables or INSERT data found in SQL dump: {source}")
             if table_name:
@@ -521,10 +601,17 @@ class DataProfiler:
         return [cls.profile_dataset(source_path, max_sample_rows=max_sample_rows)]
 
     @classmethod
-    def profile_dataset(cls, source: Any, table_name: Optional[str] = None, max_sample_rows: int = 2000) -> DatasetProfile:
+    def profile_dataset(
+        cls,
+        source: Any,
+        table_name: Optional[str] = None,
+        max_sample_rows: int = 2000,
+        source_name: Optional[str] = None
+    ) -> DatasetProfile:
         """Profiles a complete dataset for schema matching and transformation."""
-        df, source_name = cls.load_dataset(source, table_name)
-        return cls._profile_dataframe(df, source_name, max_sample_rows=max_sample_rows)
+        df, inferred_name = cls.load_dataset(source, table_name)
+        final_name = source_name if source_name is not None else inferred_name
+        return cls._profile_dataframe(df, final_name, max_sample_rows=max_sample_rows)
 
     @classmethod
     def _profile_dataframe(

@@ -18,6 +18,8 @@ if os.path.exists('learning_data.json'):
     datas.append(('learning_data.json', '.'))
 if os.path.exists('ui'):
     datas.append(('ui', 'ui'))
+if os.path.exists('vendor/ollama'):
+    datas.append(('vendor/ollama', 'vendor/ollama'))
 
 try:
     datas += collect_data_files('PySide6')

@@ -283,18 +283,24 @@ class SchemaMatcher:
         all_tokens = source_cp.tokens.union(sample_cp.tokens)
         token_jaccard = len(common_tokens) / max(len(all_tokens), 1)
 
-        # Fuzzy string similarity via SequenceMatcher
+        # Fuzzy string similarity via SequenceMatcher (only trust high ratios if no tokens shared)
         seq_ratio = difflib.SequenceMatcher(None, source_cp.normalized_name, sample_cp.normalized_name).ratio()
-        name_score = max(token_jaccard, seq_ratio)
+        if not common_tokens and seq_ratio < 0.75:
+            name_score = token_jaccard  # 0.0, prevent accidental letter overlap between unrelated words
+        else:
+            name_score = max(token_jaccard, seq_ratio)
 
         # ── Tier 4: Type Compatibility ───────────────────────────────────────
         type_score = 0.0
         if source_cp.inferred_type == sample_cp.inferred_type:
-            type_score = 1.0
+            if source_cp.inferred_type in ["text", "categorical"]:
+                type_score = 0.2  # Generic text has low discriminant value
+            else:
+                type_score = 1.0  # Specific types (datetime, currency, email, phone) are highly discriminant
         elif {source_cp.inferred_type, sample_cp.inferred_type} <= {"numeric_int", "numeric_float", "currency"}:
             type_score = 0.8
-        elif sample_cp.inferred_type == "text":
-            type_score = 0.5  # Text sample can accept anything converted to string
+        elif sample_cp.inferred_type in ["text", "categorical"]:
+            type_score = 0.1  # Text sample can accept anything converted to string
         elif source_cp.inferred_type in ["datetime", "email", "phone"] and sample_cp.inferred_type not in ["datetime", "email", "phone", "text"]:
             type_score = -0.5  # Heavy penalty for mismatching structural contact/date types
 
@@ -311,6 +317,16 @@ class SchemaMatcher:
         # Weighted aggregate
         # Weights: Name(0.50), Type(0.30), Value(0.20)
         composite_score = (0.50 * name_score) + (0.30 * type_score) + (0.20 * value_score)
+
+        # Semantic mismatch penalty: ID column vs Name column
+        id_tokens = {"id", "identifier", "code", "num", "number", "key"}
+        name_tokens = {"name", "fullname", "fname", "lname"}
+        src_is_id = bool(source_cp.tokens.intersection(id_tokens))
+        tgt_is_id = bool(sample_cp.tokens.intersection(id_tokens))
+        src_is_name = bool(source_cp.tokens.intersection(name_tokens))
+        tgt_is_name = bool(sample_cp.tokens.intersection(name_tokens))
+        if (src_is_id and tgt_is_name and not tgt_is_id) or (src_is_name and tgt_is_id and not src_is_id):
+            composite_score *= 0.25
 
         # If already assigned to another column, apply penalty to favor unassigned candidates
         if is_already_assigned:
